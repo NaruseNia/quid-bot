@@ -1,13 +1,34 @@
 use super::{Context, Error};
 use poise::serenity_prelude::{self as serenity, CreateEmbed};
+use std::collections::HashMap;
+use std::sync::Arc;
+use tokio::sync::Mutex;
+
+struct DiarySession {
+    channel_id: serenity::ChannelId,
+    messages: Vec<String>,
+    started_at: chrono::NaiveDateTime,
+}
+
+type Sessions = Arc<Mutex<HashMap<String, DiarySession>>>;
+
+static ACTIVE_SESSIONS: std::sync::LazyLock<Sessions> =
+    std::sync::LazyLock::new(|| Arc::new(Mutex::new(HashMap::new())));
+
+fn session_key(user_id: serenity::UserId, guild_id: &str) -> String {
+    format!("{}_{}", user_id, guild_id)
+}
 
 /// 日記
-#[poise::command(slash_command, subcommands("write", "list", "view", "search"))]
+#[poise::command(
+    slash_command,
+    subcommands("write", "start", "end", "list", "view", "search")
+)]
 pub async fn diary(_ctx: Context<'_>) -> Result<(), Error> {
     Ok(())
 }
 
-/// 日記を書く
+/// 日記を書く（一括）
 #[poise::command(slash_command)]
 async fn write(
     ctx: Context<'_>,
@@ -38,48 +59,135 @@ async fn write(
     )
     .await?;
 
-    let completed = super::todo::get_completed_todos_for_date(
+    let embed = build_diary_embed(&data.db, &ctx, &content, &mood, &tags, is_public, &date).await?;
+    ctx.send(poise::CreateReply::default().embed(embed)).await?;
+    Ok(())
+}
+
+/// 日記モード開始 — 以降の発言を自動収集
+#[poise::command(slash_command)]
+async fn start(ctx: Context<'_>) -> Result<(), Error> {
+    let guild_id = ctx.guild_id().map(|g| g.to_string()).unwrap_or_default();
+    let key = session_key(ctx.author().id, &guild_id);
+
+    let mut sessions = ACTIVE_SESSIONS.lock().await;
+    if sessions.contains_key(&key) {
+        ctx.send(
+            poise::CreateReply::default().embed(
+                CreateEmbed::new()
+                    .title("⚠️ 日記モード")
+                    .description("既に日記モード中です。\n`/diary end` で保存できます。")
+                    .color(0xFEE75C),
+            ),
+        )
+        .await?;
+        return Ok(());
+    }
+
+    sessions.insert(
+        key,
+        DiarySession {
+            channel_id: ctx.channel_id(),
+            messages: Vec::new(),
+            started_at: chrono::Local::now().naive_local(),
+        },
+    );
+
+    ctx.send(
+        poise::CreateReply::default().embed(
+            CreateEmbed::new()
+                .title("📔 日記モード開始")
+                .description(
+                    "このチャンネルでの発言を自動で記録します。\n\
+                     `/diary end` で記録を終了して日記として保存します。",
+                )
+                .color(0x57F287),
+        ),
+    )
+    .await?;
+    Ok(())
+}
+
+/// 日記モード終了 — 収集した発言を日記として保存
+#[poise::command(slash_command)]
+async fn end(
+    ctx: Context<'_>,
+    #[description = "気分 (😊😐😢🔥😴 等)"] mood: Option<String>,
+    #[description = "タグ (カンマ区切り)"] tags: Option<String>,
+    #[description = "公開する (デフォルト: 公開)"] public: Option<bool>,
+) -> Result<(), Error> {
+    let guild_id = ctx.guild_id().map(|g| g.to_string()).unwrap_or_default();
+    let key = session_key(ctx.author().id, &guild_id);
+
+    let session = {
+        let mut sessions = ACTIVE_SESSIONS.lock().await;
+        sessions.remove(&key)
+    };
+
+    let Some(session) = session else {
+        ctx.send(
+            poise::CreateReply::default().embed(
+                CreateEmbed::new()
+                    .title("⚠️ 日記モード")
+                    .description("日記モードは開始されていません。\n`/diary start` で開始してください。")
+                    .color(0xFEE75C),
+            ),
+        )
+        .await?;
+        return Ok(());
+    };
+
+    if session.messages.is_empty() {
+        ctx.send(
+            poise::CreateReply::default().embed(
+                CreateEmbed::new()
+                    .title("📔 日記モード終了")
+                    .description("記録された発言がありませんでした。")
+                    .color(0x99AAB5),
+            ),
+        )
+        .await?;
+        return Ok(());
+    }
+
+    let data = ctx.data();
+    let is_public = public.unwrap_or(true);
+    let date = chrono::Local::now().format("%Y-%m-%d").to_string();
+    let content = session.messages.join("\n");
+
+    let entry = serde_json::json!({
+        "content": content,
+        "mood": mood,
+        "tags": tags.as_deref().map(|t| t.split(',').map(|s| s.trim()).collect::<Vec<_>>()),
+        "collected": true,
+        "message_count": session.messages.len(),
+    });
+
+    save_diary(
         &data.db,
         &ctx.author().id.to_string(),
         &guild_id,
+        &entry.to_string(),
+        is_public,
         &date,
     )
     .await?;
 
-    let mut embed = CreateEmbed::new()
-        .title(format!("📔 {}の日記", date))
-        .description(&content)
-        .color(0x57F287)
-        .timestamp(serenity::Timestamp::now());
+    let duration = chrono::Local::now().naive_local() - session.started_at;
+    let duration_str = if duration.num_hours() > 0 {
+        format!("{}時間{}分", duration.num_hours(), duration.num_minutes() % 60)
+    } else {
+        format!("{}分", duration.num_minutes())
+    };
 
-    if let Some(ref m) = mood {
-        embed = embed.field("気分", m, true);
-    }
-
-    if let Some(ref t) = tags {
-        let tag_str: String = t
-            .split(',')
-            .map(|s| format!("`{}`", s.trim()))
-            .collect::<Vec<_>>()
-            .join(" ");
-        embed = embed.field("タグ", tag_str, true);
-    }
-
-    if !completed.is_empty() {
-        let tasks: String = completed
-            .iter()
-            .map(|(id, title, priority)| {
-                let emoji = priority_emoji(priority);
-                format!("{} #{} {}", emoji, id, title)
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-        embed = embed.field("✅ 今日の完了タスク", tasks, false);
-    }
-
-    if !is_public {
-        embed = embed.footer(serenity::CreateEmbedFooter::new("🔒 非公開"));
-    }
+    let embed =
+        build_diary_embed(&data.db, &ctx, &content, &mood, &tags, is_public, &date).await?;
+    let embed = embed
+        .field(
+            "📊 記録情報",
+            format!("{}件の発言 / {}", session.messages.len(), duration_str),
+            false,
+        );
 
     ctx.send(poise::CreateReply::default().embed(embed)).await?;
     Ok(())
@@ -109,7 +217,7 @@ async fn list(
             poise::CreateReply::default().embed(
                 CreateEmbed::new()
                     .title("📔 日記一覧")
-                    .description("日記はまだありません。\n`/diary write` で書き始めましょう！")
+                    .description("日記はまだありません。\n`/diary write` か `/diary start` で書き始めましょう！")
                     .color(0x99AAB5),
             ),
         )
@@ -211,7 +319,7 @@ async fn view(
     Ok(())
 }
 
-/// タグで日記を検索
+/// キーワードで日記を検索
 #[poise::command(slash_command)]
 async fn search(
     ctx: Context<'_>,
@@ -261,6 +369,81 @@ async fn search(
     )
     .await?;
     Ok(())
+}
+
+pub async fn handle_message(user_id: serenity::UserId, channel_id: serenity::ChannelId, guild_id: Option<serenity::GuildId>, content: &str) {
+    let guild_str = guild_id.map(|g| g.to_string()).unwrap_or_default();
+    let key = session_key(user_id, &guild_str);
+
+    let mut sessions = ACTIVE_SESSIONS.lock().await;
+    if let Some(session) = sessions.get_mut(&key)
+        && session.channel_id == channel_id
+    {
+        session.messages.push(content.to_string());
+    }
+}
+
+async fn build_diary_embed(
+    pool: &sqlx::SqlitePool,
+    ctx: &Context<'_>,
+    content: &str,
+    mood: &Option<String>,
+    tags: &Option<String>,
+    is_public: bool,
+    date: &str,
+) -> Result<CreateEmbed, Error> {
+    let guild_id = ctx.guild_id().map(|g| g.to_string()).unwrap_or_default();
+
+    let completed = super::todo::get_completed_todos_for_date(
+        pool,
+        &ctx.author().id.to_string(),
+        &guild_id,
+        date,
+    )
+    .await?;
+
+    let display = if content.len() > 4000 {
+        format!("{}...", &content[..4000])
+    } else {
+        content.to_string()
+    };
+
+    let mut embed = CreateEmbed::new()
+        .title(format!("📔 {}の日記", date))
+        .description(display)
+        .color(0x57F287)
+        .timestamp(serenity::Timestamp::now());
+
+    if let Some(m) = mood {
+        embed = embed.field("気分", m, true);
+    }
+
+    if let Some(t) = tags {
+        let tag_str: String = t
+            .split(',')
+            .map(|s| format!("`{}`", s.trim()))
+            .collect::<Vec<_>>()
+            .join(" ");
+        embed = embed.field("タグ", tag_str, true);
+    }
+
+    if !completed.is_empty() {
+        let tasks: String = completed
+            .iter()
+            .map(|(id, title, priority)| {
+                let emoji = priority_emoji(priority);
+                format!("{} #{} {}", emoji, id, title)
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        embed = embed.field("✅ 今日の完了タスク", tasks, false);
+    }
+
+    if !is_public {
+        embed = embed.footer(serenity::CreateEmbedFooter::new("🔒 非公開"));
+    }
+
+    Ok(embed)
 }
 
 async fn save_diary(

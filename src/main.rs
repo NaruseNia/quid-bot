@@ -39,6 +39,23 @@ async fn main() -> error::Result<()> {
                 commands::habit::habit(),
                 commands::alarm::alarm(),
             ],
+            event_handler: |_ctx, event, _framework, _data| {
+                Box::pin(async move {
+                    if let serenity::FullEvent::Message { new_message } = event {
+                        if new_message.author.bot {
+                            return Ok(());
+                        }
+                        commands::diary::handle_message(
+                            new_message.author.id,
+                            new_message.channel_id,
+                            new_message.guild_id,
+                            &new_message.content,
+                        )
+                        .await;
+                    }
+                    Ok(())
+                })
+            },
             ..Default::default()
         })
         .setup(move |ctx, _ready, framework| {
