@@ -33,24 +33,25 @@ pub async fn join_vc(
     guild_id: serenity::GuildId,
     channel_id: serenity::ChannelId,
 ) -> Result<Arc<tokio::sync::Mutex<songbird::Call>>, crate::error::Error> {
-    for attempt in 0..3 {
-        match manager.join(guild_id, channel_id).await {
-            Ok(handler) => {
-                tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-                return Ok(handler);
-            }
-            Err(e) => {
-                if attempt < 2 {
-                    tracing::warn!("VC join attempt {} failed: {}, retrying...", attempt + 1, e);
-                    manager.leave(guild_id).await.ok();
-                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-                } else {
-                    return Err(e.into());
-                }
-            }
-        }
+    if let Ok(handler) = manager.join(guild_id, channel_id).await {
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        return Ok(handler);
     }
-    unreachable!()
+
+    // join() failed but voice state update was sent (bot appears in VC).
+    // The UDP connection may still be establishing — grab the existing handler.
+    if let Some(handler) = manager.get(guild_id) {
+        tracing::info!("VC join timed out, using existing handler (connection may be in progress)");
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        return Ok(handler);
+    }
+
+    // No handler at all — clean up and retry once
+    manager.leave(guild_id).await.ok();
+    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    let handler = manager.join(guild_id, channel_id).await?;
+    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    Ok(handler)
 }
 
 pub async fn play_on_handler(
