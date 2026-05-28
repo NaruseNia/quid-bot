@@ -117,6 +117,15 @@ OpenRouter (デフォルト) / OpenAI / Claude を切替可能。レスポンス
 | `/sleep goal <時間>` | 目標睡眠時間を設定（達成率追跡） |
 | `/sleep history [件数]` | 直近の記録一覧 |
 
+### 音楽 (`/music`)
+
+| コマンド | 概要 |
+|---------|------|
+| `/music random [genre] [keyword]` | Spotifyからランダム1曲おすすめ |
+| `/music genres` | 使用可能なジャンル一覧 |
+
+ジャンル: pop, rock, jazz, k-pop, anime, lo-fi 等25種。アルバムアート・Spotifyリンク・30秒プレビュー付き。
+
 ### サーバー設定 (`/settings`)
 
 | コマンド | 概要 |
@@ -156,6 +165,9 @@ DISCORD_TOKEN=your_discord_bot_token
 OPENROUTER_API_KEY=your_openrouter_api_key
 OPENAI_API_KEY=your_openai_api_key        # optional
 ANTHROPIC_API_KEY=your_anthropic_api_key    # optional
+SPOTIFY_CLIENT_ID=your_spotify_client_id    # optional, for /music
+SPOTIFY_CLIENT_SECRET=your_spotify_secret   # optional, for /music
+ENCRYPTION_KEY=your-32-char-secret-key!!!   # for API key encryption
 ```
 
 `config.toml` でBot動作を設定（AIモデル、ポモドーロ時間、音声ファイルパス等）。
@@ -193,6 +205,8 @@ cargo build --release
 - [tokio](https://github.com/tokio-rs/tokio) — 非同期ランタイム
 - [feed-rs](https://github.com/feed-rs/feed-rs) — RSS/Atomフィードパーサー
 - [Open-Meteo](https://open-meteo.com) — 天気API（無料・キー不要）
+- [Spotify Web API](https://developer.spotify.com/) — 音楽レコメンド
+- [aes-gcm](https://github.com/RustCrypto/AEADs) — APIキー暗号化（AES-256-GCM）
 
 ## ライセンス
 
