@@ -44,7 +44,7 @@ struct Choice {
 /// AIに質問する
 #[poise::command(
     slash_command,
-    subcommands("new_conversation", "oneshot", "clear", "dispose", "usage")
+    subcommands("new_conversation", "oneshot", "clear", "dispose", "usage", "pin", "save_thread", "load", "saved")
 )]
 pub async fn ask(_ctx: Context<'_>) -> Result<(), Error> {
     Ok(())
@@ -219,6 +219,175 @@ async fn dispose(ctx: Context<'_>) -> Result<(), Error> {
     let edit = serenity::EditThread::new().archived(true).locked(true);
     channel_id.edit_thread(ctx.http(), edit).await?;
 
+    Ok(())
+}
+
+/// スレッドをピン留め（自動アーカイブを最大に延長）
+#[poise::command(slash_command)]
+async fn pin(ctx: Context<'_>) -> Result<(), Error> {
+    let data = ctx.data();
+    let channel_id = ctx.channel_id();
+
+    if !is_in_thread(ctx.serenity_context(), channel_id).await {
+        ctx.send(poise::CreateReply::default().embed(
+            CreateEmbed::new().description("このコマンドはスレッド内でのみ使用できます。").color(0xED4245),
+        )).await?;
+        return Ok(());
+    }
+
+    let guild_id = ctx.guild_id().map(|g| g.to_string()).unwrap_or_default();
+
+    let edit = serenity::EditThread::new()
+        .auto_archive_duration(serenity::AutoArchiveDuration::OneWeek);
+    channel_id.edit_thread(ctx.http(), edit).await?;
+
+    sqlx::query(
+        "INSERT INTO saved_threads (user_id, guild_id, thread_id, name, pinned) VALUES (?, ?, ?, ?, 1) ON CONFLICT(thread_id) DO UPDATE SET pinned = 1",
+    )
+    .bind(ctx.author().id.to_string())
+    .bind(&guild_id)
+    .bind(channel_id.to_string())
+    .bind("pinned")
+    .execute(&data.db)
+    .await?;
+
+    ctx.send(poise::CreateReply::default().embed(
+        CreateEmbed::new()
+            .title("📌 スレッドをピン留め")
+            .description("自動アーカイブを1週間に延長しました。")
+            .color(0x57F287),
+    )).await?;
+    Ok(())
+}
+
+/// 会話スレッドに名前を付けて保存
+#[poise::command(slash_command, rename = "save")]
+async fn save_thread(
+    ctx: Context<'_>,
+    #[description = "保存名"] name: String,
+) -> Result<(), Error> {
+    let data = ctx.data();
+    let channel_id = ctx.channel_id();
+
+    if !is_in_thread(ctx.serenity_context(), channel_id).await {
+        ctx.send(poise::CreateReply::default().embed(
+            CreateEmbed::new().description("このコマンドはスレッド内でのみ使用できます。").color(0xED4245),
+        )).await?;
+        return Ok(());
+    }
+
+    let guild_id = ctx.guild_id().map(|g| g.to_string()).unwrap_or_default();
+
+    sqlx::query(
+        "INSERT INTO saved_threads (user_id, guild_id, thread_id, name) VALUES (?, ?, ?, ?) ON CONFLICT(thread_id) DO UPDATE SET name = excluded.name",
+    )
+    .bind(ctx.author().id.to_string())
+    .bind(&guild_id)
+    .bind(channel_id.to_string())
+    .bind(&name)
+    .execute(&data.db)
+    .await?;
+
+    let msg_count = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM conversations WHERE thread_id = ?",
+    )
+    .bind(channel_id.to_string())
+    .fetch_one(&data.db)
+    .await?;
+
+    ctx.send(poise::CreateReply::default().embed(
+        CreateEmbed::new()
+            .title("💾 会話を保存")
+            .description(format!("**{}** として保存しました。", name))
+            .field("メッセージ数", format!("{}件", msg_count), true)
+            .field("スレッド", format!("<#{}>", channel_id), true)
+            .color(0x57F287),
+    )).await?;
+    Ok(())
+}
+
+/// 保存済みスレッドに移動（リンク表示）
+#[poise::command(slash_command)]
+async fn load(
+    ctx: Context<'_>,
+    #[description = "保存名"] name: String,
+) -> Result<(), Error> {
+    let data = ctx.data();
+    let guild_id = ctx.guild_id().map(|g| g.to_string()).unwrap_or_default();
+
+    let thread = sqlx::query_as::<_, (String, bool)>(
+        "SELECT thread_id, pinned FROM saved_threads WHERE user_id = ? AND guild_id = ? AND name = ?",
+    )
+    .bind(ctx.author().id.to_string())
+    .bind(&guild_id)
+    .bind(&name)
+    .fetch_optional(&data.db)
+    .await?;
+
+    let Some((thread_id, pinned)) = thread else {
+        ctx.send(poise::CreateReply::default().embed(
+            CreateEmbed::new().description(format!("保存済み会話「{}」が見つかりません。", name)).color(0xED4245),
+        )).await?;
+        return Ok(());
+    };
+
+    let thread_channel: serenity::ChannelId = thread_id.parse::<u64>().unwrap_or(0).into();
+
+    // アーカイブされていたら解除
+    let edit = serenity::EditThread::new().archived(false);
+    thread_channel.edit_thread(ctx.http(), edit).await.ok();
+
+    let pin_icon = if pinned { " 📌" } else { "" };
+
+    ctx.send(poise::CreateReply::default().embed(
+        CreateEmbed::new()
+            .title(format!("💬 {}{}", name, pin_icon))
+            .description(format!("スレッドを再開しました: <#{}>", thread_id))
+            .color(0x5865F2),
+    )).await?;
+    Ok(())
+}
+
+/// 保存済み会話スレッド一覧
+#[poise::command(slash_command)]
+async fn saved(ctx: Context<'_>) -> Result<(), Error> {
+    let data = ctx.data();
+    let guild_id = ctx.guild_id().map(|g| g.to_string()).unwrap_or_default();
+
+    let threads = sqlx::query_as::<_, (String, String, bool, String)>(
+        "SELECT thread_id, name, pinned, created_at FROM saved_threads WHERE user_id = ? AND guild_id = ? ORDER BY created_at DESC",
+    )
+    .bind(ctx.author().id.to_string())
+    .bind(&guild_id)
+    .fetch_all(&data.db)
+    .await?;
+
+    if threads.is_empty() {
+        ctx.send(poise::CreateReply::default().embed(
+            CreateEmbed::new()
+                .title("💬 保存済み会話")
+                .description("保存済みの会話はありません。\nスレッド内で `/ask save <名前>` で保存できます。")
+                .color(0x99AAB5),
+        )).await?;
+        return Ok(());
+    }
+
+    let desc: String = threads
+        .iter()
+        .map(|(thread_id, name, pinned, date)| {
+            let pin = if *pinned { " 📌" } else { "" };
+            let date_short = &date[..10.min(date.len())];
+            format!("**{}**{} — <#{}> ({})", name, pin, thread_id, date_short)
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    ctx.send(poise::CreateReply::default().embed(
+        CreateEmbed::new()
+            .title("💬 保存済み会話")
+            .description(desc)
+            .color(0x5865F2),
+    )).await?;
     Ok(())
 }
 

@@ -143,3 +143,28 @@ CREATE TABLE IF NOT EXISTS sleep_logs (
 );
 
 CREATE INDEX IF NOT EXISTS idx_sleep_logs_user ON sleep_logs(user_id, guild_id, sleep_at);
+
+CREATE TABLE IF NOT EXISTS memos (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT NOT NULL,
+    guild_id TEXT NOT NULL,
+    title TEXT NOT NULL,
+    content TEXT NOT NULL,
+    language TEXT,
+    tags TEXT,
+    created_at DATETIME NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_memos_user ON memos(user_id, guild_id);
+
+CREATE TABLE IF NOT EXISTS saved_threads (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT NOT NULL,
+    guild_id TEXT NOT NULL,
+    thread_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    pinned BOOLEAN NOT NULL DEFAULT 0,
+    created_at DATETIME NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_saved_threads_thread ON saved_threads(thread_id);

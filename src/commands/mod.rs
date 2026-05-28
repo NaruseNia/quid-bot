@@ -3,6 +3,7 @@ pub mod ask;
 pub mod diary;
 pub mod habit;
 pub mod help;
+pub mod memo;
 pub mod music;
 pub mod news;
 pub mod pomo;
