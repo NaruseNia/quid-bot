@@ -2,7 +2,7 @@ use super::{Context, Error};
 use poise::serenity_prelude::{self as serenity, CreateEmbed};
 
 /// VCアラーム
-#[poise::command(slash_command, subcommands("set", "list_alarms", "delete", "snooze", "stop", "volume"))]
+#[poise::command(slash_command, subcommands("set", "list_alarms", "delete", "snooze", "stop", "volume", "notify"))]
 pub async fn alarm(_ctx: Context<'_>) -> Result<(), Error> {
     Ok(())
 }
@@ -229,6 +229,32 @@ async fn volume(
     Ok(())
 }
 
+/// アラーム通知チャンネルを設定（サーバー単位）
+#[poise::command(slash_command)]
+async fn notify(
+    ctx: Context<'_>,
+    #[description = "通知先チャンネル"] channel: serenity::ChannelId,
+) -> Result<(), Error> {
+    let data = ctx.data();
+    let guild_id = ctx.guild_id().map(|g| g.to_string()).unwrap_or_default();
+
+    sqlx::query(
+        "INSERT INTO guild_settings (guild_id, key, value) VALUES (?, 'alarm_notify_channel', ?) ON CONFLICT(guild_id, key) DO UPDATE SET value = excluded.value",
+    )
+    .bind(&guild_id)
+    .bind(channel.to_string())
+    .execute(&data.db)
+    .await?;
+
+    ctx.send(poise::CreateReply::default().embed(
+        CreateEmbed::new()
+            .title("📢 通知チャンネル設定")
+            .description(format!("アラーム通知先を <#{}> に設定しました。", channel))
+            .color(0x57F287),
+    )).await?;
+    Ok(())
+}
+
 /// アラームを停止（鳴動中・スヌーズ中を含む）
 #[poise::command(slash_command)]
 async fn stop(
@@ -327,12 +353,29 @@ pub async fn alarm_loop(
                 .await
                 .ok();
 
-            let text_channels = http.get_channels(guild_id).await.unwrap_or_default();
+            let guild_id_str_clone = guild_id_str.clone();
+            let notify_channel = sqlx::query_scalar::<_, String>(
+                "SELECT value FROM guild_settings WHERE guild_id = ? AND key = 'alarm_notify_channel'",
+            )
+            .bind(&guild_id_str_clone)
+            .fetch_optional(&pool)
+            .await
+            .ok()
+            .flatten()
+            .and_then(|v| v.parse::<u64>().ok())
+            .map(serenity::ChannelId::from);
 
-            if let Some(ch) = text_channels
-                .iter()
-                .find(|c| c.kind == serenity::ChannelType::Text)
-            {
+            let notify_target = if let Some(ch) = notify_channel {
+                Some(ch)
+            } else {
+                let text_channels = http.get_channels(guild_id).await.unwrap_or_default();
+                text_channels
+                    .iter()
+                    .find(|c| c.kind == serenity::ChannelType::Text)
+                    .map(|c| c.id)
+            };
+
+            if let Some(ch_id) = notify_target {
                 let embed = CreateEmbed::new()
                     .title("⏰ アラーム！")
                     .description(format!(
@@ -341,7 +384,7 @@ pub async fn alarm_loop(
                     ))
                     .color(0xED4245);
 
-                ch.id
+                ch_id
                     .send_message(&http, serenity::CreateMessage::new().embed(embed))
                     .await
                     .ok();
@@ -365,6 +408,26 @@ pub async fn alarm_loop(
             let timeout = auto_leave_timeout;
 
             tokio::spawn(async move {
+                let handler = match crate::voice::join_vc(
+                    &manager_clone,
+                    guild_id,
+                    vc_channel,
+                )
+                .await
+                {
+                    Ok(h) => h,
+                    Err(e) => {
+                        tracing::warn!("alarm #{} VC join failed: {}", id, e);
+                        manager_clone.leave(guild_id).await.ok();
+                        sqlx::query("UPDATE alarms SET ringing = 0 WHERE id = ?")
+                            .bind(id)
+                            .execute(&pool_clone)
+                            .await
+                            .ok();
+                        return;
+                    }
+                };
+
                 let repeats = repeat_count.max(1) as u32;
                 for i in 0..repeats {
                     let still_ringing = sqlx::query_scalar::<_, bool>(
@@ -381,16 +444,10 @@ pub async fn alarm_loop(
                         break;
                     }
 
-                    if let Err(e) = crate::voice::play_sound_once(
-                        &manager_clone,
-                        guild_id,
-                        vc_channel,
-                        &audio_clone,
-                        volume,
-                    )
-                    .await
+                    if let Err(e) =
+                        crate::voice::play_on_handler(&handler, &audio_clone, volume).await
                     {
-                        tracing::warn!("alarm #{} repeat playback failed: {}", id, e);
+                        tracing::warn!("alarm #{} playback failed: {}", id, e);
                         break;
                     }
 

@@ -28,15 +28,36 @@ pub async fn play_sound_in_vc(
     Ok(())
 }
 
-pub async fn play_sound_once(
+pub async fn join_vc(
     manager: &Arc<songbird::Songbird>,
     guild_id: serenity::GuildId,
     channel_id: serenity::ChannelId,
+) -> Result<Arc<tokio::sync::Mutex<songbird::Call>>, crate::error::Error> {
+    for attempt in 0..3 {
+        match manager.join(guild_id, channel_id).await {
+            Ok(handler) => {
+                tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                return Ok(handler);
+            }
+            Err(e) => {
+                if attempt < 2 {
+                    tracing::warn!("VC join attempt {} failed: {}, retrying...", attempt + 1, e);
+                    manager.leave(guild_id).await.ok();
+                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                } else {
+                    return Err(e.into());
+                }
+            }
+        }
+    }
+    unreachable!()
+}
+
+pub async fn play_on_handler(
+    handler_lock: &Arc<tokio::sync::Mutex<songbird::Call>>,
     audio_path: &str,
     volume: f32,
 ) -> Result<(), crate::error::Error> {
-    let handler_lock = manager.join(guild_id, channel_id).await?;
-
     let (tx, rx) = tokio::sync::oneshot::channel::<()>();
     {
         let mut handler = handler_lock.lock().await;
