@@ -105,6 +105,34 @@ const COMMANDS: &[CommandInfo] = &[
         ],
         extras: "",
     },
+    CommandInfo {
+        name: "news",
+        emoji: "📰",
+        short: "ニュース（プリセット+カスタムRSS、AI要約対応）",
+        subcommands: &[
+            ("show <カテゴリ>", "ニュースを表示（tech/world/japan/business）"),
+            ("show <カテゴリ> summary:True", "AI要約付きで表示"),
+            ("add <名前> <RSS URL>", "カスタムRSSフィードを登録"),
+            ("remove <名前>", "カスタムフィードを削除"),
+            ("list", "登録フィード一覧"),
+        ],
+        extras: "",
+    },
+    CommandInfo {
+        name: "today",
+        emoji: "☀️",
+        short: "デイリーブリーフィング（天気・ニュース・TODO・習慣）",
+        subcommands: &[
+            ("show", "今日のブリーフィングを表示"),
+            ("city <都市名>", "天気の対象都市を設定（サーバー単位）"),
+            ("feeds <カテゴリ,...>", "ニュースカテゴリを設定（サーバー単位）"),
+            ("subscribe <HH:MM> [チャンネル]", "毎日の自動投稿を設定（管理者のみ）"),
+            ("unsubscribe", "自動投稿を解除（管理者のみ）"),
+        ],
+        extras: "**天気**: Open-Meteo API（無料・キー不要）\n\
+                 **ニュース**: RSS → AI要約\n\
+                 **TODO/習慣/リマインダー**: 手動実行時のみ表示",
+    },
 ];
 
 /// コマンド一覧・使い方を表示

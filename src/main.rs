@@ -29,7 +29,10 @@ async fn main() -> error::Result<()> {
 
     let pool_remind = pool.clone();
     let pool_alarm = pool.clone();
+    let pool_today = pool.clone();
     let config_alarm = config.clone();
+    let config_today = config.clone();
+    let http_client_today = http_client.clone();
 
     let framework = poise::Framework::builder()
         .options(poise::FrameworkOptions {
@@ -41,6 +44,8 @@ async fn main() -> error::Result<()> {
                 commands::remind::remind(),
                 commands::habit::habit(),
                 commands::alarm::alarm(),
+                commands::news::news(),
+                commands::today::today(),
                 commands::help::quid_help(),
             ],
             event_handler: |ctx, event, _framework, data| {
@@ -138,6 +143,17 @@ async fn main() -> error::Result<()> {
                         .await;
                     });
                 }
+
+                let http3 = ctx.http.clone();
+                tokio::spawn(async move {
+                    commands::today::today_loop(
+                        http3,
+                        pool_today,
+                        http_client_today,
+                        config_today,
+                    )
+                    .await;
+                });
 
                 Ok(Data {
                     db: pool,

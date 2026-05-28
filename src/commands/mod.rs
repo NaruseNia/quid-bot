@@ -3,8 +3,10 @@ pub mod ask;
 pub mod diary;
 pub mod habit;
 pub mod help;
+pub mod news;
 pub mod pomo;
 pub mod remind;
+pub mod today;
 pub mod todo;
 
 use crate::Data;

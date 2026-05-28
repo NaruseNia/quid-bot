@@ -22,7 +22,7 @@ fn session_key(user_id: serenity::UserId, guild_id: &str) -> String {
 /// 日記
 #[poise::command(
     slash_command,
-    subcommands("write", "start", "end", "list", "view", "search")
+    subcommands("write", "edit", "start", "end", "list", "view", "search", "delete")
 )]
 pub async fn diary(_ctx: Context<'_>) -> Result<(), Error> {
     Ok(())
@@ -368,6 +368,93 @@ async fn search(
         ),
     )
     .await?;
+    Ok(())
+}
+
+/// 日記を編集（上書き）
+#[poise::command(slash_command)]
+async fn edit(
+    ctx: Context<'_>,
+    #[description = "日付 (YYYY-MM-DD、省略で今日)"] date: Option<String>,
+    #[description = "新しい内容"] content: String,
+    #[description = "気分"] mood: Option<String>,
+    #[description = "タグ (カンマ区切り)"] tags: Option<String>,
+    #[description = "公開する"] public: Option<bool>,
+) -> Result<(), Error> {
+    let data = ctx.data();
+    let guild_id = ctx.guild_id().map(|g| g.to_string()).unwrap_or_default();
+    let date = date.unwrap_or_else(|| chrono::Local::now().format("%Y-%m-%d").to_string());
+
+    let existing = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM diaries WHERE user_id = ? AND guild_id = ? AND date = ?",
+    )
+    .bind(ctx.author().id.to_string())
+    .bind(&guild_id)
+    .bind(&date)
+    .fetch_one(&data.db)
+    .await?;
+
+    if existing == 0 {
+        ctx.say(format!("{} の日記はありません。`/diary write` で作成してください。", date))
+            .await?;
+        return Ok(());
+    }
+
+    let is_public = public.unwrap_or(true);
+    let entry = serde_json::json!({
+        "content": content,
+        "mood": mood,
+        "tags": tags.as_deref().map(|t| t.split(',').map(|s| s.trim()).collect::<Vec<_>>()),
+    });
+
+    save_diary(
+        &data.db,
+        &ctx.author().id.to_string(),
+        &guild_id,
+        &entry.to_string(),
+        is_public,
+        &date,
+    )
+    .await?;
+
+    let embed = build_diary_embed(&data.db, &ctx, &content, &mood, &tags, is_public, &date).await?;
+    let embed = embed.field("✏️", "編集済み", true);
+
+    ctx.send(poise::CreateReply::default().embed(embed)).await?;
+    Ok(())
+}
+
+/// 日記を削除
+#[poise::command(slash_command)]
+async fn delete(
+    ctx: Context<'_>,
+    #[description = "日付 (YYYY-MM-DD)"] date: String,
+) -> Result<(), Error> {
+    let data = ctx.data();
+    let guild_id = ctx.guild_id().map(|g| g.to_string()).unwrap_or_default();
+
+    let result = sqlx::query(
+        "DELETE FROM diaries WHERE user_id = ? AND guild_id = ? AND date = ?",
+    )
+    .bind(ctx.author().id.to_string())
+    .bind(&guild_id)
+    .bind(&date)
+    .execute(&data.db)
+    .await?;
+
+    if result.rows_affected() == 0 {
+        ctx.say(format!("{} の日記はありません。", date)).await?;
+    } else {
+        ctx.send(
+            poise::CreateReply::default().embed(
+                CreateEmbed::new()
+                    .title("🗑️ 日記削除")
+                    .description(format!("{} の日記を削除しました。", date))
+                    .color(0xED4245),
+            ),
+        )
+        .await?;
+    }
     Ok(())
 }
 
