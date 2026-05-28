@@ -117,6 +117,17 @@ OpenRouter (デフォルト) / OpenAI / Claude を切替可能。レスポンス
 | `/sleep goal <時間>` | 目標睡眠時間を設定（達成率追跡） |
 | `/sleep history [件数]` | 直近の記録一覧 |
 
+### サーバー設定 (`/settings`)
+
+| コマンド | 概要 |
+|---------|------|
+| `/settings apikey <provider> <key>` | サーバー固有のAPIキーを設定（管理者のみ） |
+| `/settings provider <name>` | AIプロバイダーを設定（openai/openrouter/anthropic） |
+| `/settings model <name>` | AIモデルを設定 |
+| `/settings show` | 現在の設定を表示（キーはマスク表示） |
+
+サーバーごとにAPIキー・プロバイダー・モデルを設定可能。未設定の場合は `.env` / `config.toml` のグローバル設定にフォールバック。
+
 ### ヘルプ (`/quid-help`)
 
 | コマンド | 概要 |
