@@ -185,7 +185,7 @@ async fn clear(ctx: Context<'_>) -> Result<(), Error> {
     Ok(())
 }
 
-/// スレッドをアーカイブして会話履歴を削除
+/// スレッドをアーカイブ（保存済みなら履歴保持、未保存なら削除）
 #[poise::command(slash_command)]
 async fn dispose(ctx: Context<'_>) -> Result<(), Error> {
     let data = ctx.data();
@@ -201,20 +201,40 @@ async fn dispose(ctx: Context<'_>) -> Result<(), Error> {
     }
 
     let thread_id_str = channel_id.to_string();
-    sqlx::query("DELETE FROM conversations WHERE thread_id = ?")
-        .bind(&thread_id_str)
-        .execute(&data.db)
-        .await?;
 
-    ctx.send(
-        poise::CreateReply::default().embed(
-            CreateEmbed::new()
-                .title("📦 スレッド終了")
-                .description("会話履歴を削除し、スレッドをアーカイブします。")
-                .color(0x99AAB5),
-        ),
+    let is_saved = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM saved_threads WHERE thread_id = ?",
     )
-    .await?;
+    .bind(&thread_id_str)
+    .fetch_one(&data.db)
+    .await? > 0;
+
+    if is_saved {
+        ctx.send(
+            poise::CreateReply::default().embed(
+                CreateEmbed::new()
+                    .title("📦 スレッドをアーカイブ")
+                    .description("保存済みの会話です。要約と履歴を保持したままアーカイブします。\n`/ask load` で再開できます。")
+                    .color(0x57F287),
+            ),
+        )
+        .await?;
+    } else {
+        sqlx::query("DELETE FROM conversations WHERE thread_id = ?")
+            .bind(&thread_id_str)
+            .execute(&data.db)
+            .await?;
+
+        ctx.send(
+            poise::CreateReply::default().embed(
+                CreateEmbed::new()
+                    .title("📦 スレッド終了")
+                    .description("会話履歴を削除し、アーカイブします。\n保存したい場合は先に `/ask save <名前>` を使ってください。")
+                    .color(0x99AAB5),
+            ),
+        )
+        .await?;
+    }
 
     let edit = serenity::EditThread::new().archived(true).locked(true);
     channel_id.edit_thread(ctx.http(), edit).await?;
@@ -260,12 +280,13 @@ async fn pin(ctx: Context<'_>) -> Result<(), Error> {
     Ok(())
 }
 
-/// 会話スレッドに名前を付けて保存
+/// 会話をAI要約して名前付き保存（フル履歴は削除してDB軽量化）
 #[poise::command(slash_command, rename = "save")]
 async fn save_thread(
     ctx: Context<'_>,
     #[description = "保存名"] name: String,
 ) -> Result<(), Error> {
+    ctx.defer().await?;
     let data = ctx.data();
     let channel_id = ctx.channel_id();
 
@@ -277,36 +298,58 @@ async fn save_thread(
     }
 
     let guild_id = ctx.guild_id().map(|g| g.to_string()).unwrap_or_default();
+    let thread_id_str = channel_id.to_string();
+
+    let history = sqlx::query_as::<_, (String, String)>(
+        "SELECT role, content FROM conversations WHERE thread_id = ? ORDER BY created_at ASC",
+    )
+    .bind(&thread_id_str)
+    .fetch_all(&data.db)
+    .await?;
+
+    let msg_count = history.len();
+
+    let summary = if history.is_empty() {
+        "(会話履歴なし)".to_string()
+    } else {
+        let conversation: String = history
+            .iter()
+            .map(|(role, content)| format!("{}: {}", role, content))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        generate_summary(&data.http_client, &data.db, &guild_id, &data.config, &conversation).await
+    };
 
     sqlx::query(
-        "INSERT INTO saved_threads (user_id, guild_id, thread_id, name) VALUES (?, ?, ?, ?) ON CONFLICT(thread_id) DO UPDATE SET name = excluded.name",
+        "INSERT INTO saved_threads (user_id, guild_id, thread_id, name, summary) VALUES (?, ?, ?, ?, ?) ON CONFLICT(thread_id) DO UPDATE SET name = excluded.name, summary = excluded.summary",
     )
     .bind(ctx.author().id.to_string())
     .bind(&guild_id)
-    .bind(channel_id.to_string())
+    .bind(&thread_id_str)
     .bind(&name)
+    .bind(&summary)
     .execute(&data.db)
     .await?;
 
-    let msg_count = sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(*) FROM conversations WHERE thread_id = ?",
-    )
-    .bind(channel_id.to_string())
-    .fetch_one(&data.db)
-    .await?;
+    // フル履歴を削除してDB軽量化
+    sqlx::query("DELETE FROM conversations WHERE thread_id = ?")
+        .bind(&thread_id_str)
+        .execute(&data.db)
+        .await?;
 
     ctx.send(poise::CreateReply::default().embed(
         CreateEmbed::new()
             .title("💾 会話を保存")
             .description(format!("**{}** として保存しました。", name))
-            .field("メッセージ数", format!("{}件", msg_count), true)
-            .field("スレッド", format!("<#{}>", channel_id), true)
+            .field("元メッセージ数", format!("{}件", msg_count), true)
+            .field("要約", &summary, false)
             .color(0x57F287),
     )).await?;
     Ok(())
 }
 
-/// 保存済みスレッドに移動（リンク表示）
+/// 保存済み会話を復元（要約をコンテキストとして注入）
 #[poise::command(slash_command)]
 async fn load(
     ctx: Context<'_>,
@@ -315,8 +358,8 @@ async fn load(
     let data = ctx.data();
     let guild_id = ctx.guild_id().map(|g| g.to_string()).unwrap_or_default();
 
-    let thread = sqlx::query_as::<_, (String, bool)>(
-        "SELECT thread_id, pinned FROM saved_threads WHERE user_id = ? AND guild_id = ? AND name = ?",
+    let thread = sqlx::query_as::<_, (String, bool, Option<String>)>(
+        "SELECT thread_id, pinned, summary FROM saved_threads WHERE user_id = ? AND guild_id = ? AND name = ?",
     )
     .bind(ctx.author().id.to_string())
     .bind(&guild_id)
@@ -324,7 +367,7 @@ async fn load(
     .fetch_optional(&data.db)
     .await?;
 
-    let Some((thread_id, pinned)) = thread else {
+    let Some((thread_id, pinned, summary)) = thread else {
         ctx.send(poise::CreateReply::default().embed(
             CreateEmbed::new().description(format!("保存済み会話「{}」が見つかりません。", name)).color(0xED4245),
         )).await?;
@@ -333,18 +376,48 @@ async fn load(
 
     let thread_channel: serenity::ChannelId = thread_id.parse::<u64>().unwrap_or(0).into();
 
-    // アーカイブされていたら解除
-    let edit = serenity::EditThread::new().archived(false);
+    // アーカイブ・ロック解除
+    let edit = serenity::EditThread::new().archived(false).locked(false);
     thread_channel.edit_thread(ctx.http(), edit).await.ok();
 
-    let pin_icon = if pinned { " 📌" } else { "" };
+    // 要約をシステムメッセージとしてDB注入（会話の文脈を復元）
+    if let Some(ref s) = summary {
+        let existing = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM conversations WHERE thread_id = ?",
+        )
+        .bind(&thread_id)
+        .fetch_one(&data.db)
+        .await?;
 
-    ctx.send(poise::CreateReply::default().embed(
-        CreateEmbed::new()
-            .title(format!("💬 {}{}", name, pin_icon))
-            .description(format!("スレッドを再開しました: <#{}>", thread_id))
-            .color(0x5865F2),
-    )).await?;
+        if existing == 0 {
+            let context_msg = format!("以下は前回の会話の要約です。この文脈を踏まえて会話を続けてください:\n\n{}", s);
+            sqlx::query(
+                "INSERT INTO conversations (user_id, thread_id, role, content, model) VALUES (?, ?, 'system', ?, 'system')",
+            )
+            .bind(ctx.author().id.to_string())
+            .bind(&thread_id)
+            .bind(&context_msg)
+            .execute(&data.db)
+            .await?;
+        }
+    }
+
+    let pin_icon = if pinned { " 📌" } else { "" };
+    let mut embed = CreateEmbed::new()
+        .title(format!("💬 {}{}", name, pin_icon))
+        .description(format!("スレッドを再開しました: <#{}>", thread_id))
+        .color(0x5865F2);
+
+    if let Some(ref s) = summary {
+        let preview = if s.len() > 300 {
+            format!("{}...", &s[..300])
+        } else {
+            s.clone()
+        };
+        embed = embed.field("前回の要約", preview, false);
+    }
+
+    ctx.send(poise::CreateReply::default().embed(embed)).await?;
     Ok(())
 }
 
@@ -773,5 +846,37 @@ fn provider_to_str(p: AiProvider) -> &'static str {
         AiProvider::OpenRouter => "openrouter",
         AiProvider::OpenAI => "openai",
         AiProvider::Anthropic => "anthropic",
+    }
+}
+
+async fn generate_summary(
+    http_client: &reqwest::Client,
+    db: &sqlx::SqlitePool,
+    guild_id: &str,
+    config: &crate::config::Config,
+    conversation: &str,
+) -> String {
+    let ai = crate::ai::resolve(db, guild_id, config, None, None).await;
+    if ai.api_key.is_empty() {
+        return "(要約生成不可: APIキー未設定)".to_string();
+    }
+
+    let truncated = if conversation.len() > 6000 {
+        &conversation[..6000]
+    } else {
+        conversation
+    };
+
+    let messages = vec![ChatMessage {
+        role: "user".to_string(),
+        content: format!(
+            "以下の会話を3-5文で要約してください。重要なトピック、決定事項、コンテキストを保持してください。\n\n{}",
+            truncated
+        ),
+    }];
+
+    match call_api_raw(http_client, &ai.api_url, &ai.api_key, &ai.model, messages).await {
+        Ok(AiResult::Ok(text, _)) => text,
+        _ => "(要約の生成に失敗しました)".to_string(),
     }
 }

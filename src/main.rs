@@ -50,6 +50,7 @@ async fn main() -> error::Result<()> {
                 commands::music::music(),
                 commands::news::news(),
                 commands::sleep::sleep(),
+                commands::thread::thread(),
                 commands::today::today(),
                 commands::settings::settings(),
                 commands::help::quid_help(),

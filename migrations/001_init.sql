@@ -164,6 +164,16 @@ CREATE TABLE IF NOT EXISTS saved_threads (
     thread_id TEXT NOT NULL,
     name TEXT NOT NULL,
     pinned BOOLEAN NOT NULL DEFAULT 0,
+    summary TEXT,
+    created_at DATETIME NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS thread_bookmarks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT NOT NULL,
+    guild_id TEXT NOT NULL,
+    channel_id TEXT NOT NULL,
+    name TEXT NOT NULL,
     created_at DATETIME NOT NULL DEFAULT (datetime('now'))
 );
 
