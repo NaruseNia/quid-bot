@@ -73,7 +73,7 @@ async fn main() -> error::Result<()> {
 
                         let bot_id = ctx.cache.current_user().id;
 
-                        // @mention → oneshot
+                        // @mention → oneshot (with !look:N and reply reference support)
                         if new_message.mentions_user_id(bot_id) {
                             let content = new_message
                                 .content
@@ -81,6 +81,11 @@ async fn main() -> error::Result<()> {
                                 .replace(&format!("<@!{}>", bot_id), "")
                                 .trim()
                                 .to_string();
+
+                            let referenced = new_message
+                                .referenced_message
+                                .as_ref()
+                                .map(|m| format!("{}: {}", m.author.name, m.content));
 
                             let guild_str = new_message.guild_id.map(|g| g.to_string()).unwrap_or_default();
                             if !content.is_empty()
@@ -93,6 +98,8 @@ async fn main() -> error::Result<()> {
                                     new_message.channel_id,
                                     &new_message.author.id.to_string(),
                                     &content,
+                                    new_message.id,
+                                    referenced.as_deref(),
                                 )
                                 .await
                             {

@@ -124,19 +124,36 @@ async fn oneshot(
     #[description = "質問内容"] question: String,
     #[description = "AIプロバイダー"] provider: Option<AiProvider>,
     #[description = "モデル名"] model: Option<String>,
+    #[description = "参照するメッセージ数"] look: Option<u8>,
 ) -> Result<(), Error> {
-    ctx.defer().await?;
+    let channel_context = if let Some(count) = look {
+        fetch_channel_context(ctx.http(), ctx.channel_id(), None, count.min(20)).await?
+    } else {
+        String::new()
+    };
+
+    let reply = ctx
+        .send(
+            poise::CreateReply::default().embed(
+                CreateEmbed::new()
+                    .description("🤔 考え中...")
+                    .color(0xE67E22),
+            ),
+        )
+        .await?;
 
     let data = ctx.data();
     let guild_id_str = ctx.guild_id().map(|g| g.to_string()).unwrap_or_default();
     let provider_str = provider.map(provider_to_str);
     let ai = crate::ai::resolve(&data.db, &guild_id_str, &data.config, provider_str, model).await;
 
+    let full_question = format!("{}{}", channel_context, question);
+
     let result =
         call_api_raw(&data.http_client, &ai.api_url, &ai.api_key, &ai.model, vec![
             ChatMessage {
                 role: "user".to_string(),
-                content: question.clone(),
+                content: full_question,
             },
         ])
         .await?;
@@ -145,14 +162,19 @@ async fn oneshot(
         AiResult::Ok(text, usage) => {
             record_usage(&data.db, &ctx.author().id.to_string(), &ai.model, usage).await;
             let footer = format_footer(&ai.model, "oneshot", usage);
-            send_embed_reply(ctx.channel_id(), ctx.http(), &text, &footer).await
+            edit_reply_with_response(&reply, ctx, &text, &footer).await
         }
         AiResult::Error(status, body) => {
-            ctx.send(poise::CreateReply::default().embed(
-                CreateEmbed::new()
-                    .description(format!("❌ APIエラー ({}): {}", status, body))
-                    .color(0xED4245),
-            )).await?;
+            reply
+                .edit(
+                    ctx,
+                    poise::CreateReply::default().embed(
+                        CreateEmbed::new()
+                            .description(format!("❌ APIエラー ({}): {}", status, body))
+                            .color(0xED4245),
+                    ),
+                )
+                .await?;
             Ok(())
         }
     }
@@ -563,8 +585,6 @@ pub async fn handle_thread_message(
         return Ok(());
     }
 
-    let _ = channel_id.broadcast_typing(http).await;
-
     let ai = crate::ai::resolve(db, guild_id, config, None, None).await;
 
     call_ai_threaded(
@@ -591,15 +611,44 @@ pub async fn handle_mention(
     channel_id: serenity::ChannelId,
     user_id: &str,
     content: &str,
+    before_message: serenity::MessageId,
+    referenced_content: Option<&str>,
 ) -> Result<(), Error> {
-    let _ = channel_id.broadcast_typing(http).await;
+    let (look_count, clean_content) = parse_look_prefix(content);
+
+    let thinking_msg = channel_id
+        .send_message(
+            http,
+            serenity::CreateMessage::new().embed(
+                CreateEmbed::new()
+                    .description("🤔 考え中...")
+                    .color(0xE67E22),
+            ),
+        )
+        .await?;
+
+    let mut prompt = String::new();
+
+    if let Some(ref_content) = referenced_content {
+        prompt.push_str(&format!(
+            "以下はユーザーが返信元として参照しているメッセージです:\n---\n{}\n---\n\n",
+            ref_content
+        ));
+    }
+
+    if let Some(count) = look_count {
+        let ctx = fetch_channel_context(http, channel_id, Some(before_message), count).await?;
+        prompt.push_str(&ctx);
+    }
+
+    prompt.push_str(&clean_content);
 
     let ai = crate::ai::resolve(db, guild_id, config, None, None).await;
 
     let result = call_api_raw(http_client, &ai.api_url, &ai.api_key, &ai.model, vec![
         ChatMessage {
             role: "user".to_string(),
-            content: content.to_string(),
+            content: prompt,
         },
     ])
     .await?;
@@ -608,13 +657,14 @@ pub async fn handle_mention(
         AiResult::Ok(text, usage) => {
             record_usage(db, user_id, &ai.model, usage).await;
             let footer = format_footer(&ai.model, "oneshot", usage);
-            send_embed_reply(channel_id, http, &text, &footer).await
+            edit_to_response(channel_id, http, thinking_msg.id, &text, &footer).await
         }
         AiResult::Error(status, body) => {
             channel_id
-                .send_message(
+                .edit_message(
                     http,
-                    serenity::CreateMessage::new().embed(
+                    thinking_msg.id,
+                    serenity::EditMessage::new().embed(
                         CreateEmbed::new()
                             .title("❌ APIエラー")
                             .description(format!("{}: {}", status, body))
@@ -641,6 +691,17 @@ async fn call_ai_threaded(
     api_key: &str,
     model_name: &str,
 ) -> Result<(), Error> {
+    let thinking_msg = thread_id
+        .send_message(
+            http,
+            serenity::CreateMessage::new().embed(
+                CreateEmbed::new()
+                    .description("🤔 考え中...")
+                    .color(0xE67E22),
+            ),
+        )
+        .await?;
+
     let thread_id_str = thread_id.to_string();
 
     let history = sqlx::query_as::<_, (String, String)>(
@@ -664,9 +725,10 @@ async fn call_ai_threaded(
     match result {
         AiResult::Error(status, body) => {
             thread_id
-                .send_message(
+                .edit_message(
                     http,
-                    serenity::CreateMessage::new().embed(
+                    thinking_msg.id,
+                    serenity::EditMessage::new().embed(
                         CreateEmbed::new()
                             .title("❌ APIエラー")
                             .description(format!("{}: {}", status, body))
@@ -710,7 +772,7 @@ async fn call_ai_threaded(
                 &format!("{}ターン", history_count / 2),
                 usage,
             );
-            send_embed_reply(thread_id, http, &reply_text, &footer).await?;
+            edit_to_response(thread_id, http, thinking_msg.id, &reply_text, &footer).await?;
         }
     }
 
@@ -784,14 +846,27 @@ fn format_footer(model: &str, context: &str, usage: Usage) -> String {
     }
 }
 
-async fn send_embed_reply(
+async fn edit_to_response(
     channel_id: serenity::ChannelId,
     http: &serenity::Http,
+    message_id: serenity::MessageId,
     text: &str,
     footer: &str,
 ) -> Result<(), Error> {
     if text.len() > 4000 {
-        for chunk in text.as_bytes().chunks(4000) {
+        channel_id
+            .edit_message(
+                http,
+                message_id,
+                serenity::EditMessage::new().embed(
+                    CreateEmbed::new()
+                        .description(&text[..4000])
+                        .color(0x5865F2)
+                        .footer(serenity::CreateEmbedFooter::new(footer)),
+                ),
+            )
+            .await?;
+        for chunk in text[4000..].as_bytes().chunks(4000) {
             let chunk_str = String::from_utf8_lossy(chunk);
             channel_id
                 .send_message(
@@ -799,17 +874,17 @@ async fn send_embed_reply(
                     serenity::CreateMessage::new().embed(
                         CreateEmbed::new()
                             .description(chunk_str.to_string())
-                            .color(0x5865F2)
-                            .footer(serenity::CreateEmbedFooter::new(footer)),
+                            .color(0x5865F2),
                     ),
                 )
                 .await?;
         }
     } else {
         channel_id
-            .send_message(
+            .edit_message(
                 http,
-                serenity::CreateMessage::new().embed(
+                message_id,
+                serenity::EditMessage::new().embed(
                     CreateEmbed::new()
                         .description(text)
                         .color(0x5865F2)
@@ -819,6 +894,104 @@ async fn send_embed_reply(
             .await?;
     }
     Ok(())
+}
+
+async fn edit_reply_with_response(
+    reply: &poise::ReplyHandle<'_>,
+    ctx: Context<'_>,
+    text: &str,
+    footer: &str,
+) -> Result<(), Error> {
+    if text.len() > 4000 {
+        reply
+            .edit(
+                ctx,
+                poise::CreateReply::default().embed(
+                    CreateEmbed::new()
+                        .description(&text[..4000])
+                        .color(0x5865F2)
+                        .footer(serenity::CreateEmbedFooter::new(footer)),
+                ),
+            )
+            .await?;
+        for chunk in text[4000..].as_bytes().chunks(4000) {
+            let chunk_str = String::from_utf8_lossy(chunk);
+            ctx.channel_id()
+                .send_message(
+                    ctx.http(),
+                    serenity::CreateMessage::new().embed(
+                        CreateEmbed::new()
+                            .description(chunk_str.to_string())
+                            .color(0x5865F2),
+                    ),
+                )
+                .await?;
+        }
+    } else {
+        reply
+            .edit(
+                ctx,
+                poise::CreateReply::default().embed(
+                    CreateEmbed::new()
+                        .description(text)
+                        .color(0x5865F2)
+                        .footer(serenity::CreateEmbedFooter::new(footer)),
+                ),
+            )
+            .await?;
+    }
+    Ok(())
+}
+
+fn parse_look_prefix(content: &str) -> (Option<u8>, String) {
+    let trimmed = content.trim();
+    if let Some(rest) = trimmed.strip_prefix("!look:") {
+        let num_end = rest.find(|c: char| !c.is_ascii_digit()).unwrap_or(rest.len());
+        if num_end > 0 {
+            if let Ok(n) = rest[..num_end].parse::<u8>() {
+                let remaining = rest[num_end..].trim().to_string();
+                return (Some(n.min(20)), remaining);
+            }
+        }
+    }
+    (None, content.to_string())
+}
+
+async fn fetch_channel_context(
+    http: &serenity::Http,
+    channel_id: serenity::ChannelId,
+    before: Option<serenity::MessageId>,
+    count: u8,
+) -> Result<String, Error> {
+    let builder = if let Some(id) = before {
+        serenity::GetMessages::new().before(id).limit(count)
+    } else {
+        serenity::GetMessages::new().limit(count)
+    };
+
+    let messages = channel_id.messages(http, builder).await?;
+
+    if messages.is_empty() {
+        return Ok(String::new());
+    }
+
+    let lines: Vec<String> = messages
+        .iter()
+        .rev()
+        .map(|m| {
+            let name = if m.author.bot {
+                format!("[BOT] {}", m.author.name)
+            } else {
+                m.author.name.clone()
+            };
+            format!("{}: {}", name, m.content)
+        })
+        .collect();
+
+    Ok(format!(
+        "以下はチャンネルの直近の会話です（参考情報）:\n---\n{}\n---\n\n",
+        lines.join("\n")
+    ))
 }
 
 async fn is_in_thread(ctx: &serenity::Context, channel_id: serenity::ChannelId) -> bool {
