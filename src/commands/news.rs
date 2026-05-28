@@ -325,21 +325,25 @@ pub async fn generate_news_summary(
 }
 
 fn resolve_ai_config(config: &crate::config::Config) -> (String, String, String) {
+    let model = &config.bot.default_model;
+    // OpenRouterモデル名 "openai/gpt-4o-mini" → OpenAI直接なら "gpt-4o-mini" に変換
+    let strip_prefix = |m: &str| m.split('/').next_back().unwrap_or(m).to_string();
+
     match config.bot.default_ai_provider.as_str() {
         "openai" => (
             "https://api.openai.com/v1/chat/completions".to_string(),
             std::env::var("OPENAI_API_KEY").unwrap_or_default(),
-            config.bot.default_model.clone(),
+            strip_prefix(model),
         ),
         "anthropic" => (
             "https://openrouter.ai/api/v1/chat/completions".to_string(),
             std::env::var("OPENROUTER_API_KEY").unwrap_or_default(),
-            config.bot.default_model.clone(),
+            model.clone(),
         ),
         _ => (
             "https://openrouter.ai/api/v1/chat/completions".to_string(),
             std::env::var("OPENROUTER_API_KEY").unwrap_or_default(),
-            config.bot.default_model.clone(),
+            model.clone(),
         ),
     }
 }
