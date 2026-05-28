@@ -28,6 +28,38 @@ pub async fn play_sound_in_vc(
     Ok(())
 }
 
+pub async fn play_sound_once(
+    manager: &Arc<songbird::Songbird>,
+    guild_id: serenity::GuildId,
+    channel_id: serenity::ChannelId,
+    audio_path: &str,
+    volume: f32,
+) -> Result<(), crate::error::Error> {
+    let handler_lock = manager.join(guild_id, channel_id).await?;
+
+    let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+    {
+        let mut handler = handler_lock.lock().await;
+        let source = File::new(audio_path.to_string());
+        let track_handle = handler.play_input(source.into());
+        let _ = track_handle.set_volume(volume);
+
+        track_handle.add_event(
+            Event::Track(TrackEvent::End),
+            TrackEndNotifier {
+                sender: std::sync::Mutex::new(Some(tx)),
+            },
+        )?;
+    }
+
+    let _ = rx.await;
+    Ok(())
+}
+
+pub async fn leave_vc(manager: &Arc<songbird::Songbird>, guild_id: serenity::GuildId) {
+    manager.leave(guild_id).await.ok();
+}
+
 struct TrackEndLeaver {
     manager: Arc<songbird::Songbird>,
     guild_id: serenity::GuildId,
@@ -46,6 +78,22 @@ impl EventHandler for TrackEndLeaver {
             manager.leave(guild_id).await.ok();
         });
 
+        None
+    }
+}
+
+struct TrackEndNotifier {
+    sender: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+}
+
+#[async_trait::async_trait]
+impl EventHandler for TrackEndNotifier {
+    async fn act(&self, _ctx: &EventContext<'_>) -> Option<Event> {
+        if let Ok(mut guard) = self.sender.lock() {
+            if let Some(tx) = guard.take() {
+                let _ = tx.send(());
+            }
+        }
         None
     }
 }

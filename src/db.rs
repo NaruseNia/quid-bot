@@ -15,5 +15,12 @@ pub async fn init(db_path: &str) -> crate::error::Result<SqlitePool> {
         }
     }
 
+    for stmt in [
+        "ALTER TABLE alarms ADD COLUMN repeat_count INTEGER NOT NULL DEFAULT 3",
+        "ALTER TABLE alarms ADD COLUMN ringing BOOLEAN NOT NULL DEFAULT 0",
+    ] {
+        sqlx::query(stmt).execute(&pool).await.ok();
+    }
+
     Ok(pool)
 }
