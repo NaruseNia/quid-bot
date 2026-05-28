@@ -4,17 +4,78 @@ Rust製の多機能パーソナルDiscord Bot。
 
 ## 機能
 
+### AI質問 (`/ask`)
+
 | コマンド | 概要 |
 |---------|------|
-| `/ask` | AI質問（OpenRouter/OpenAI/Claude切替、スレッド単位で会話履歴保持） |
+| `/ask new <質問>` | 新しい会話スレッドを作成してAIに質問 |
+| `/ask oneshot <質問>` | 単発質問（スレッド作成なし・履歴保存なし） |
+| `/ask clear` | 現在のスレッドの会話履歴を削除 |
+| `/ask dispose` | スレッドをアーカイブ+ロックして履歴削除 |
+| `@Bot メッセージ` | メンションでoneshot応答 |
+| スレッド内の発言 | Bot作成スレッド内では自動でAI応答 |
+
+OpenRouter (デフォルト) / OpenAI / Claude を切替可能。
+
+### 日記 (`/diary`)
+
+| コマンド | 概要 |
+|---------|------|
 | `/diary write` | 日記を書く（気分・タグ・完了タスク自動集計・公開/非公開） |
-| `/diary start/end` | 日記モード（発言を自動収集→まとめて日記に保存） |
-| `/diary list/view/search` | 過去の日記の閲覧・検索 |
-| `/pomo start [minutes] [vc_channel]` | ポモドーロタイマー（メンション通知、オプトインVC通知） |
-| `/remind set/repeat` | リマインダー（一回限り+繰り返し対応） |
-| `/alarm set/snooze` | VCアラーム（VC接続して音声再生、スヌーズ対応） |
-| `/todo add/list/done/delete` | TODO管理（優先度・期限・日記自動集計） |
-| `/habit add/check/list/stats` | 習慣トラッカー（コマンド+ボタンUI、streak・達成率） |
+| `/diary start` | 日記モード開始 — 以降の発言を自動収集 |
+| `/diary end` | 日記モード終了 — 収集した発言をまとめて保存 |
+| `/diary list` | 過去の日記一覧 |
+| `/diary view <日付>` | 特定日の日記を表示 |
+| `/diary search <キーワード>` | キーワードで日記を検索 |
+
+### TODO管理 (`/todo`)
+
+| コマンド | 概要 |
+|---------|------|
+| `/todo add <タスク名>` | タスク追加（優先度・期限オプション） |
+| `/todo list` | タスク一覧 |
+| `/todo done <ID>` | タスクを完了 |
+| `/todo delete <ID>` | タスクを削除 |
+
+完了タスクは日記に自動集計。
+
+### ポモドーロ (`/pomo`)
+
+| コマンド | 概要 |
+|---------|------|
+| `/pomo start [分] [VCチャンネル]` | タイマー開始（VC通知オプション） |
+| `/pomo stop` | 中断 |
+| `/pomo status` | 残り時間・進捗バー |
+
+### リマインダー (`/remind`)
+
+| コマンド | 概要 |
+|---------|------|
+| `/remind set <時間> <メッセージ>` | 一回限りリマインダー |
+| `/remind repeat <頻度> <時刻> <メッセージ>` | 繰り返し（daily/weekly/monthly） |
+| `/remind list` | 一覧 |
+| `/remind delete <ID>` | 削除 |
+
+### VCアラーム (`/alarm`)
+
+| コマンド | 概要 |
+|---------|------|
+| `/alarm set <時間> <VCチャンネル>` | アラーム設定 |
+| `/alarm snooze <ID> [分]` | スヌーズ（デフォルト5分） |
+| `/alarm list` | 一覧 |
+| `/alarm delete <ID>` | 削除 |
+
+時間になるとVCに接続して音声再生。再生後に自動退出。
+
+### 習慣トラッカー (`/habit`)
+
+| コマンド | 概要 |
+|---------|------|
+| `/habit add <名前>` | 習慣を登録 |
+| `/habit check <名前>` | 達成をチェック |
+| `/habit list` | 一覧（ボタンUI付き） |
+| `/habit stats <名前>` | streak・週間/月間達成率 |
+| `/habit remove <名前>` | 削除 |
 
 ## セットアップ
 
@@ -40,6 +101,12 @@ ANTHROPIC_API_KEY=your_anthropic_api_key    # optional
 ```
 
 `config.toml` でBot動作を設定（AIモデル、ポモドーロ時間、音声ファイルパス等）。
+
+### Discord Developer Portal
+
+1. Bot作成 → TOKEN取得
+2. **Privileged Gateway Intents** → MESSAGE CONTENT INTENT を ON
+3. OAuth2 URL Generator → `bot` + `applications.commands` スコープで招待
 
 ### 音声ファイル
 
