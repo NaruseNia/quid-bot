@@ -275,7 +275,10 @@ pub async fn generate_news_summary(
     titles: &str,
 ) -> String {
     let (api_url, api_key, model) = resolve_ai_config(config);
+    tracing::debug!(provider = %config.bot.default_ai_provider, model = %model, url = %api_url, "news summary request");
+
     if api_key.is_empty() {
+        tracing::error!("AI API key is empty for provider: {}", config.bot.default_ai_provider);
         return "（API キーが未設定のため要約を生成できません）".to_string();
     }
 
@@ -298,16 +301,26 @@ pub async fn generate_news_summary(
         .await;
 
     let Ok(resp) = resp else {
-        return "（要約の生成に失敗しました）".to_string();
+        tracing::error!("news summary: HTTP request failed");
+        return "（要約の生成に失敗しました: リクエスト送信エラー）".to_string();
     };
 
-    let Ok(json) = resp.json::<serde_json::Value>().await else {
-        return "（要約の生成に失敗しました）".to_string();
+    let status = resp.status();
+    let body = resp.text().await.unwrap_or_default();
+
+    if !status.is_success() {
+        tracing::error!(status = %status, body = %body, "news summary: API returned error");
+        return format!("（要約の生成に失敗: {} {}）", status, &body[..body.len().min(200)]);
+    }
+
+    let Ok(json) = serde_json::from_str::<serde_json::Value>(&body) else {
+        tracing::error!(body = %&body[..body.len().min(500)], "news summary: failed to parse JSON");
+        return "（要約の生成に失敗: レスポンス解析エラー）".to_string();
     };
 
     json["choices"][0]["message"]["content"]
         .as_str()
-        .unwrap_or("（要約の生成に失敗しました）")
+        .unwrap_or("（要約の生成に失敗: 応答なし）")
         .to_string()
 }
 
