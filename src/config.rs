@@ -5,7 +5,6 @@ use std::path::Path;
 pub struct Config {
     pub bot: BotConfig,
     pub pomodoro: PomodoroConfig,
-    pub diary: DiaryConfig,
     pub database: DatabaseConfig,
     pub audio: AudioConfig,
 }
@@ -20,11 +19,6 @@ pub struct BotConfig {
 pub struct PomodoroConfig {
     pub default_work_min: u32,
     pub default_break_min: u32,
-}
-
-#[derive(Debug, Deserialize, Clone)]
-pub struct DiaryConfig {
-    pub template_fields: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -57,13 +51,6 @@ impl Default for Config {
             pomodoro: PomodoroConfig {
                 default_work_min: 25,
                 default_break_min: 5,
-            },
-            diary: DiaryConfig {
-                template_fields: vec![
-                    "やったこと".to_string(),
-                    "明日やること".to_string(),
-                    "感想".to_string(),
-                ],
             },
             database: DatabaseConfig {
                 path: "data/quid.db".to_string(),

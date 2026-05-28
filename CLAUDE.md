@@ -31,10 +31,11 @@ src/
 ├── config.rs        # 設定読み込み (.env + config.toml)
 ├── db.rs            # DB初期化、マイグレーション
 ├── error.rs         # エラー型定義
+├── voice.rs         # VC音声再生ユーティリティ
 └── commands/
     ├── mod.rs       # コマンド登録
     ├── ask.rs       # /ask — AI質問
-    ├── diary.rs     # /diary — 日報/日記
+    ├── diary.rs     # /diary — 日記（自由記述・発言収集モード）
     ├── pomo.rs      # /pomo — ポモドーロ
     ├── remind.rs    # /remind — リマインダー
     ├── alarm.rs     # /alarm — VCアラーム
@@ -67,6 +68,9 @@ assets/              # 音声ファイル等
 
 - poise の `Data` 構造体でアプリケーション状態を共有（DB pool, HTTP client, config）
 - 各コマンドは `src/commands/` 内に1ファイル1モジュールで分離
-- ポモドーロ・リマインダーは tokio::spawn でバックグラウンドタスク管理
+- ポモドーロ・リマインダー・アラームは tokio::spawn でバックグラウンドタスク管理
 - AI APIはOpenRouterをデフォルト、コマンド引数でOpenAI/Claude直接指定も可
-- 日報とTODOは連携：日報作成時に当日完了タスクを自動集計
+- 日記とTODOは連携：日記作成時に当日完了タスクを自動集計
+- VC音声: songbird の File input → TrackEvent::End で自動退出
+- 日記モード: /diary start で発言収集開始、/diary end でまとめて保存
+- 全応答は Discord Embed で統一
