@@ -35,8 +35,14 @@ struct Choice {
 }
 
 /// AIに質問する
+#[poise::command(slash_command, subcommands("chat", "clear"))]
+pub async fn ask(_ctx: Context<'_>) -> Result<(), Error> {
+    Ok(())
+}
+
+/// AIに質問する
 #[poise::command(slash_command)]
-pub async fn ask(
+async fn chat(
     ctx: Context<'_>,
     #[description = "質問内容"] question: String,
     #[description = "AIプロバイダー"] provider: Option<AiProvider>,
@@ -126,6 +132,13 @@ pub async fn ask(
     .execute(&data.db)
     .await?;
 
+    let history_count = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM conversations WHERE thread_id = ?",
+    )
+    .bind(&thread_id)
+    .fetch_one(&data.db)
+    .await?;
+
     if reply.len() > 4000 {
         for chunk in reply.as_bytes().chunks(4000) {
             let chunk_str = String::from_utf8_lossy(chunk);
@@ -134,7 +147,10 @@ pub async fn ask(
                     CreateEmbed::new()
                         .description(chunk_str.to_string())
                         .color(0x5865F2)
-                        .footer(poise::serenity_prelude::CreateEmbedFooter::new(&model_name)),
+                        .footer(poise::serenity_prelude::CreateEmbedFooter::new(format!(
+                            "{} | 履歴: {}件",
+                            model_name, history_count / 2
+                        ))),
                 ),
             )
             .await?;
@@ -145,12 +161,43 @@ pub async fn ask(
                 CreateEmbed::new()
                     .description(&reply)
                     .color(0x5865F2)
-                    .footer(poise::serenity_prelude::CreateEmbedFooter::new(&model_name)),
+                    .footer(poise::serenity_prelude::CreateEmbedFooter::new(format!(
+                        "{} | 履歴: {}ターン",
+                        model_name, history_count / 2
+                    ))),
             ),
         )
         .await?;
     }
 
+    Ok(())
+}
+
+/// このチャンネルの会話履歴をクリア
+#[poise::command(slash_command)]
+async fn clear(ctx: Context<'_>) -> Result<(), Error> {
+    let data = ctx.data();
+    let thread_id = ctx.channel_id().to_string();
+
+    let result = sqlx::query("DELETE FROM conversations WHERE thread_id = ? AND user_id = ?")
+        .bind(&thread_id)
+        .bind(ctx.author().id.to_string())
+        .execute(&data.db)
+        .await?;
+
+    let deleted = result.rows_affected();
+    ctx.send(
+        poise::CreateReply::default().embed(
+            CreateEmbed::new()
+                .title("🧹 会話履歴クリア")
+                .description(format!(
+                    "{}件のメッセージを削除しました。\n新しい会話を始められます。",
+                    deleted
+                ))
+                .color(0x57F287),
+        ),
+    )
+    .await?;
     Ok(())
 }
 
