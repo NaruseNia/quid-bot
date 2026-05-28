@@ -85,7 +85,19 @@ async fn main() -> error::Result<()> {
                             let referenced = new_message
                                 .referenced_message
                                 .as_ref()
-                                .map(|m| format!("{}: {}", m.author.name, m.content));
+                                .map(|m| {
+                                    let name = m.member.as_ref()
+                                        .and_then(|mb| mb.nick.as_deref())
+                                        .or(m.author.global_name.as_deref())
+                                        .unwrap_or(&m.author.name);
+                                    format!("{}: {}", name, m.content)
+                                });
+
+                            let author_display = new_message.member.as_ref()
+                                .and_then(|m| m.nick.as_deref())
+                                .or(new_message.author.global_name.as_deref())
+                                .unwrap_or(&new_message.author.name)
+                                .to_string();
 
                             let guild_str = new_message.guild_id.map(|g| g.to_string()).unwrap_or_default();
                             if !content.is_empty()
@@ -100,6 +112,7 @@ async fn main() -> error::Result<()> {
                                     &content,
                                     new_message.id,
                                     referenced.as_deref(),
+                                    &author_display,
                                 )
                                 .await
                             {

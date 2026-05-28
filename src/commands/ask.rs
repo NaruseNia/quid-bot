@@ -147,7 +147,19 @@ async fn oneshot(
     let provider_str = provider.map(provider_to_str);
     let ai = crate::ai::resolve(&data.db, &guild_id_str, &data.config, provider_str, model).await;
 
-    let full_question = format!("{}{}", channel_context, question);
+    let author_name = ctx
+        .author()
+        .global_name
+        .as_deref()
+        .unwrap_or(&ctx.author().name);
+    let full_question = if channel_context.is_empty() {
+        question.clone()
+    } else {
+        format!(
+            "あなたに話しかけているユーザーは {} です。\n\n{}{}",
+            author_name, channel_context, question
+        )
+    };
 
     let result =
         call_api_raw(&data.http_client, &ai.api_url, &ai.api_key, &ai.model, vec![
@@ -613,6 +625,7 @@ pub async fn handle_mention(
     content: &str,
     before_message: serenity::MessageId,
     referenced_content: Option<&str>,
+    author_name: &str,
 ) -> Result<(), Error> {
     let (look_count, clean_content) = parse_look_prefix(content);
 
@@ -628,6 +641,14 @@ pub async fn handle_mention(
         .await?;
 
     let mut prompt = String::new();
+
+    let has_context = referenced_content.is_some() || look_count.is_some();
+    if has_context {
+        prompt.push_str(&format!(
+            "あなたに話しかけているユーザーは {} です。\n\n",
+            author_name
+        ));
+    }
 
     if let Some(ref_content) = referenced_content {
         prompt.push_str(&format!(
@@ -943,6 +964,20 @@ async fn edit_reply_with_response(
     Ok(())
 }
 
+fn display_name_from_message(m: &serenity::Message) -> String {
+    let base = m
+        .member
+        .as_ref()
+        .and_then(|member| member.nick.as_deref())
+        .or(m.author.global_name.as_deref())
+        .unwrap_or(&m.author.name);
+    if m.author.bot {
+        format!("[BOT] {}", base)
+    } else {
+        base.to_string()
+    }
+}
+
 fn parse_look_prefix(content: &str) -> (Option<u8>, String) {
     let trimmed = content.trim();
     if let Some(rest) = trimmed.strip_prefix("!look:") {
@@ -979,11 +1014,7 @@ async fn fetch_channel_context(
         .iter()
         .rev()
         .map(|m| {
-            let name = if m.author.bot {
-                format!("[BOT] {}", m.author.name)
-            } else {
-                m.author.name.clone()
-            };
+            let name = display_name_from_message(m);
             format!("{}: {}", name, m.content)
         })
         .collect();
