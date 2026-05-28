@@ -7,9 +7,13 @@ pub async fn init(db_path: &str) -> crate::error::Result<SqlitePool> {
 
     let pool = SqlitePool::connect(&format!("sqlite:{}?mode=rwc", db_path)).await?;
 
-    sqlx::query(include_str!("../migrations/001_init.sql"))
-        .execute(&pool)
-        .await?;
+    let sql = include_str!("../migrations/001_init.sql");
+    for statement in sql.split(';') {
+        let stmt = statement.trim();
+        if !stmt.is_empty() {
+            sqlx::query(stmt).execute(&pool).await?;
+        }
+    }
 
     Ok(pool)
 }

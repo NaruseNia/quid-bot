@@ -8,7 +8,7 @@ CREATE TABLE IF NOT EXISTS conversations (
     created_at DATETIME NOT NULL DEFAULT (datetime('now'))
 );
 
-CREATE INDEX idx_conversations_thread ON conversations(thread_id);
+CREATE INDEX IF NOT EXISTS idx_conversations_thread ON conversations(thread_id);
 
 CREATE TABLE IF NOT EXISTS todos (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -22,7 +22,7 @@ CREATE TABLE IF NOT EXISTS todos (
     created_at DATETIME NOT NULL DEFAULT (datetime('now'))
 );
 
-CREATE INDEX idx_todos_user_guild ON todos(user_id, guild_id);
+CREATE INDEX IF NOT EXISTS idx_todos_user_guild ON todos(user_id, guild_id);
 
 CREATE TABLE IF NOT EXISTS diaries (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -34,7 +34,7 @@ CREATE TABLE IF NOT EXISTS diaries (
     created_at DATETIME NOT NULL DEFAULT (datetime('now'))
 );
 
-CREATE UNIQUE INDEX idx_diaries_user_date ON diaries(user_id, guild_id, date);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_diaries_user_date ON diaries(user_id, guild_id, date);
 
 CREATE TABLE IF NOT EXISTS pomodoro_sessions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -59,7 +59,7 @@ CREATE TABLE IF NOT EXISTS reminders (
     created_at DATETIME NOT NULL DEFAULT (datetime('now'))
 );
 
-CREATE INDEX idx_reminders_active ON reminders(is_active, remind_at);
+CREATE INDEX IF NOT EXISTS idx_reminders_active ON reminders(is_active, remind_at);
 
 CREATE TABLE IF NOT EXISTS habits (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -70,7 +70,7 @@ CREATE TABLE IF NOT EXISTS habits (
     created_at DATETIME NOT NULL DEFAULT (datetime('now'))
 );
 
-CREATE UNIQUE INDEX idx_habits_user_name ON habits(user_id, guild_id, name);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_habits_user_name ON habits(user_id, guild_id, name);
 
 CREATE TABLE IF NOT EXISTS habit_logs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -78,7 +78,7 @@ CREATE TABLE IF NOT EXISTS habit_logs (
     checked_at DATE NOT NULL
 );
 
-CREATE UNIQUE INDEX idx_habit_logs_unique ON habit_logs(habit_id, checked_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_habit_logs_unique ON habit_logs(habit_id, checked_at);
 
 CREATE TABLE IF NOT EXISTS alarms (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -90,4 +90,4 @@ CREATE TABLE IF NOT EXISTS alarms (
     created_at DATETIME NOT NULL DEFAULT (datetime('now'))
 );
 
-CREATE INDEX idx_alarms_active ON alarms(is_active, alarm_at);
+CREATE INDEX IF NOT EXISTS idx_alarms_active ON alarms(is_active, alarm_at);
