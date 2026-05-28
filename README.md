@@ -98,6 +98,7 @@ OpenRouter (デフォルト) / OpenAI / Claude を切替可能。レスポンス
 | `/alarm stop [ID]` | アラーム停止（ID省略で全停止、鳴動中・スヌーズ中を含む） |
 | `/alarm snooze <ID> [分]` | スヌーズ（デフォルト5分） |
 | `/alarm volume <0-100>` | アラーム音量設定（サーバー単位、デフォルト30%） |
+| `/alarm notify <チャンネル>` | 通知先チャンネル設定（サーバー単位、未設定時は最初のテキストチャンネル） |
 | `/alarm list` | 一覧（🔔=鳴動中、⏰=待機中） |
 | `/alarm delete <ID>` | 削除 |
 
