@@ -2,7 +2,7 @@ use super::{Context, Error};
 use poise::serenity_prelude::{self as serenity, CreateEmbed};
 
 /// VCアラーム
-#[poise::command(slash_command, subcommands("set", "list_alarms", "delete", "snooze", "stop", "volume", "notify"))]
+#[poise::command(slash_command, subcommands("set", "list_alarms", "delete", "delete_all", "snooze", "stop", "volume", "notify"))]
 pub async fn alarm(_ctx: Context<'_>) -> Result<(), Error> {
     Ok(())
 }
@@ -147,6 +147,44 @@ async fn delete(ctx: Context<'_>, #[description = "アラームID"] id: i64) -> 
             ),
         )
         .await?;
+    }
+    Ok(())
+}
+
+/// 全アラームを削除
+#[poise::command(slash_command, rename = "delete-all")]
+async fn delete_all(ctx: Context<'_>) -> Result<(), Error> {
+    let data = ctx.data();
+    let user_id = ctx.author().id.to_string();
+    let guild_id = ctx.guild_id().map(|g| g.to_string()).unwrap_or_default();
+
+    let result = sqlx::query(
+        "UPDATE alarms SET is_active = 0, ringing = 0 WHERE user_id = ? AND guild_id = ? AND (is_active = 1 OR ringing = 1)",
+    )
+    .bind(&user_id)
+    .bind(&guild_id)
+    .execute(&data.db)
+    .await?;
+
+    if result.rows_affected() == 0 {
+        ctx.send(poise::CreateReply::default().embed(
+            CreateEmbed::new()
+                .description("削除するアラームがありません。")
+                .color(0xED4245),
+        )).await?;
+    } else {
+        if let Some(manager) = songbird::get(ctx.serenity_context()).await {
+            if let Some(gid) = ctx.guild_id() {
+                crate::voice::leave_vc(&manager, gid).await;
+            }
+        }
+
+        ctx.send(poise::CreateReply::default().embed(
+            CreateEmbed::new()
+                .title("🗑️ 全アラーム削除")
+                .description(format!("{}件のアラームを削除しました。", result.rows_affected()))
+                .color(0xED4245),
+        )).await?;
     }
     Ok(())
 }
