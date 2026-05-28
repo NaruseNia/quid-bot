@@ -41,6 +41,7 @@ async fn main() -> error::Result<()> {
                 commands::remind::remind(),
                 commands::habit::habit(),
                 commands::alarm::alarm(),
+                commands::help::quid_help(),
             ],
             event_handler: |ctx, event, _framework, data| {
                 Box::pin(async move {

@@ -2,6 +2,7 @@ pub mod alarm;
 pub mod ask;
 pub mod diary;
 pub mod habit;
+pub mod help;
 pub mod pomo;
 pub mod remind;
 pub mod todo;
