@@ -130,3 +130,16 @@ CREATE TABLE IF NOT EXISTS today_subscriptions (
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_today_sub_guild ON today_subscriptions(guild_id);
+
+CREATE TABLE IF NOT EXISTS sleep_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT NOT NULL,
+    guild_id TEXT NOT NULL,
+    sleep_at DATETIME NOT NULL,
+    wake_at DATETIME,
+    quality TEXT,
+    memo TEXT,
+    created_at DATETIME NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_sleep_logs_user ON sleep_logs(user_id, guild_id, sleep_at);

@@ -5,6 +5,7 @@ pub mod habit;
 pub mod help;
 pub mod news;
 pub mod pomo;
+pub mod sleep;
 pub mod remind;
 pub mod today;
 pub mod todo;

@@ -106,6 +106,20 @@ const COMMANDS: &[CommandInfo] = &[
         extras: "",
     },
     CommandInfo {
+        name: "sleep",
+        emoji: "😴",
+        short: "睡眠記録（就寝/起床・質・統計・目標）",
+        subcommands: &[
+            ("start", "就寝を記録"),
+            ("end [質] [メモ]", "起床を記録（good/ok/bad）"),
+            ("log <就寝> <起床> [質] [メモ]", "手動で過去分を記録"),
+            ("stats", "週間/月間平均・就寝時刻傾向・グラフ"),
+            ("goal <時間>", "目標睡眠時間を設定"),
+            ("history [件数]", "直近の記録一覧"),
+        ],
+        extras: "",
+    },
+    CommandInfo {
         name: "news",
         emoji: "📰",
         short: "ニュース（プリセット+カスタムRSS、AI要約対応）",
