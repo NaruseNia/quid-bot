@@ -73,8 +73,10 @@ async fn main() -> error::Result<()> {
                                 && let Err(e) = commands::ask::handle_mention(
                                     &ctx.http,
                                     &data.http_client,
+                                    &data.db,
                                     &data.config,
                                     new_message.channel_id,
+                                    &new_message.author.id.to_string(),
                                     &content,
                                 )
                                 .await

@@ -27,6 +27,13 @@ struct ChatMessage {
 #[derive(Deserialize)]
 struct ChatResponse {
     choices: Vec<Choice>,
+    usage: Option<Usage>,
+}
+
+#[derive(Deserialize, Clone, Copy, Default)]
+struct Usage {
+    prompt_tokens: i64,
+    completion_tokens: i64,
 }
 
 #[derive(Deserialize)]
@@ -35,7 +42,10 @@ struct Choice {
 }
 
 /// AIに質問する
-#[poise::command(slash_command, subcommands("new_conversation", "oneshot", "clear", "dispose"))]
+#[poise::command(
+    slash_command,
+    subcommands("new_conversation", "oneshot", "clear", "dispose", "usage")
+)]
 pub async fn ask(_ctx: Context<'_>) -> Result<(), Error> {
     Ok(())
 }
@@ -90,8 +100,7 @@ async fn new_conversation(
     };
 
     let provider = provider.unwrap_or_else(|| default_provider(&data.config));
-    let (api_url, api_key, model_name) =
-        resolve_api_config(provider, model, &data.config);
+    let (api_url, api_key, model_name) = resolve_api_config(provider, model, &data.config);
 
     call_ai_threaded(
         &data.http_client,
@@ -119,19 +128,29 @@ async fn oneshot(
 
     let data = ctx.data();
     let provider = provider.unwrap_or_else(|| default_provider(&data.config));
-    let (api_url, api_key, model_name) =
-        resolve_api_config(provider, model, &data.config);
+    let (api_url, api_key, model_name) = resolve_api_config(provider, model, &data.config);
 
-    let reply = call_ai_oneshot(
-        &data.http_client,
-        &question,
-        &api_url,
-        &api_key,
-        &model_name,
-    )
-    .await?;
+    let result =
+        call_api_raw(&data.http_client, &api_url, &api_key, &model_name, vec![
+            ChatMessage {
+                role: "user".to_string(),
+                content: question.clone(),
+            },
+        ])
+        .await?;
 
-    send_embed_reply(ctx.channel_id(), ctx.http(), &reply, &model_name, "oneshot").await
+    match result {
+        AiResult::Ok(text, usage) => {
+            record_usage(&data.db, &ctx.author().id.to_string(), &model_name, usage).await;
+            let footer = format_footer(&model_name, "oneshot", usage);
+            send_embed_reply(ctx.channel_id(), ctx.http(), &text, &footer).await
+        }
+        AiResult::Error(status, body) => {
+            ctx.say(format!("❌ APIエラー ({}): {}", status, body))
+                .await?;
+            Ok(())
+        }
+    }
 }
 
 /// このスレッドの会話履歴をクリア
@@ -195,6 +214,79 @@ async fn dispose(ctx: Context<'_>) -> Result<(), Error> {
     Ok(())
 }
 
+/// AI利用量の統計を表示
+#[poise::command(slash_command)]
+async fn usage(ctx: Context<'_>) -> Result<(), Error> {
+    let data = ctx.data();
+    let user_id = ctx.author().id.to_string();
+
+    let total = sqlx::query_as::<_, (i64, i64, i64)>(
+        "SELECT COUNT(*), COALESCE(SUM(prompt_tokens), 0), COALESCE(SUM(completion_tokens), 0) FROM ai_usage WHERE user_id = ?",
+    )
+    .bind(&user_id)
+    .fetch_one(&data.db)
+    .await?;
+
+    let today = sqlx::query_as::<_, (i64, i64, i64)>(
+        "SELECT COUNT(*), COALESCE(SUM(prompt_tokens), 0), COALESCE(SUM(completion_tokens), 0) FROM ai_usage WHERE user_id = ? AND date(created_at) = date('now')",
+    )
+    .bind(&user_id)
+    .fetch_one(&data.db)
+    .await?;
+
+    let by_model = sqlx::query_as::<_, (String, i64, i64, i64)>(
+        "SELECT model, COUNT(*), COALESCE(SUM(prompt_tokens), 0), COALESCE(SUM(completion_tokens), 0) FROM ai_usage WHERE user_id = ? GROUP BY model ORDER BY COUNT(*) DESC LIMIT 5",
+    )
+    .bind(&user_id)
+    .fetch_all(&data.db)
+    .await?;
+
+    let mut embed = CreateEmbed::new()
+        .title("📊 AI利用統計")
+        .color(0x5865F2)
+        .field(
+            "今日",
+            format!(
+                "{}回 | {}+{} = {} tokens",
+                today.0,
+                today.1,
+                today.2,
+                today.1 + today.2
+            ),
+            false,
+        )
+        .field(
+            "累計",
+            format!(
+                "{}回 | {}+{} = {} tokens",
+                total.0,
+                total.1,
+                total.2,
+                total.1 + total.2
+            ),
+            false,
+        );
+
+    if !by_model.is_empty() {
+        let model_stats: String = by_model
+            .iter()
+            .map(|(model, count, prompt, completion)| {
+                format!(
+                    "`{}` — {}回 ({} tokens)",
+                    model,
+                    count,
+                    prompt + completion
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        embed = embed.field("モデル別", model_stats, false);
+    }
+
+    ctx.send(poise::CreateReply::default().embed(embed)).await?;
+    Ok(())
+}
+
 // --- event_handler から呼ばれる公開関数 ---
 
 pub async fn handle_thread_message(
@@ -222,8 +314,7 @@ pub async fn handle_thread_message(
     let _ = channel_id.broadcast_typing(http).await;
 
     let provider = default_provider(config);
-    let (api_url, api_key, model_name) =
-        resolve_api_config(provider, None, config);
+    let (api_url, api_key, model_name) = resolve_api_config(provider, None, config);
 
     call_ai_threaded(
         http_client,
@@ -242,19 +333,46 @@ pub async fn handle_thread_message(
 pub async fn handle_mention(
     http: &serenity::Http,
     http_client: &reqwest::Client,
+    db: &sqlx::SqlitePool,
     config: &crate::config::Config,
     channel_id: serenity::ChannelId,
+    user_id: &str,
     content: &str,
 ) -> Result<(), Error> {
     let _ = channel_id.broadcast_typing(http).await;
 
     let provider = default_provider(config);
-    let (api_url, api_key, model_name) =
-        resolve_api_config(provider, None, config);
+    let (api_url, api_key, model_name) = resolve_api_config(provider, None, config);
 
-    let reply = call_ai_oneshot(http_client, content, &api_url, &api_key, &model_name).await?;
+    let result = call_api_raw(http_client, &api_url, &api_key, &model_name, vec![
+        ChatMessage {
+            role: "user".to_string(),
+            content: content.to_string(),
+        },
+    ])
+    .await?;
 
-    send_embed_reply(channel_id, http, &reply, &model_name, "oneshot").await
+    match result {
+        AiResult::Ok(text, usage) => {
+            record_usage(db, user_id, &model_name, usage).await;
+            let footer = format_footer(&model_name, "oneshot", usage);
+            send_embed_reply(channel_id, http, &text, &footer).await
+        }
+        AiResult::Error(status, body) => {
+            channel_id
+                .send_message(
+                    http,
+                    serenity::CreateMessage::new().embed(
+                        CreateEmbed::new()
+                            .title("❌ APIエラー")
+                            .description(format!("{}: {}", status, body))
+                            .color(0xED4245),
+                    ),
+                )
+                .await?;
+            Ok(())
+        }
+    }
 }
 
 // --- 内部ヘルパー ---
@@ -289,9 +407,9 @@ async fn call_ai_threaded(
         content: question.to_string(),
     });
 
-    let reply = call_api(http_client, api_url, api_key, model_name, messages).await?;
+    let result = call_api_raw(http_client, api_url, api_key, model_name, messages).await?;
 
-    match reply {
+    match result {
         AiResult::Error(status, body) => {
             thread_id
                 .send_message(
@@ -299,13 +417,15 @@ async fn call_ai_threaded(
                     serenity::CreateMessage::new().embed(
                         CreateEmbed::new()
                             .title("❌ APIエラー")
-                            .description(format!("ステータス: {}\n```\n{}\n```", status, body))
+                            .description(format!("{}: {}", status, body))
                             .color(0xED4245),
                     ),
                 )
                 .await?;
         }
-        AiResult::Ok(reply_text) => {
+        AiResult::Ok(reply_text, usage) => {
+            record_usage(db, user_id, model_name, usage).await;
+
             sqlx::query(
                 "INSERT INTO conversations (user_id, thread_id, role, content, model) VALUES (?, ?, 'user', ?, ?)",
             )
@@ -333,40 +453,24 @@ async fn call_ai_threaded(
             .fetch_one(db)
             .await?;
 
-            let footer = format!("{} | {}ターン", model_name, history_count / 2);
-            send_embed_reply(thread_id, http, &reply_text, model_name, &footer).await?;
+            let footer = format_footer(
+                model_name,
+                &format!("{}ターン", history_count / 2),
+                usage,
+            );
+            send_embed_reply(thread_id, http, &reply_text, &footer).await?;
         }
     }
 
     Ok(())
 }
 
-async fn call_ai_oneshot(
-    http_client: &reqwest::Client,
-    question: &str,
-    api_url: &str,
-    api_key: &str,
-    model_name: &str,
-) -> Result<String, Error> {
-    let messages = vec![ChatMessage {
-        role: "user".to_string(),
-        content: question.to_string(),
-    }];
-
-    match call_api(http_client, api_url, api_key, model_name, messages).await? {
-        AiResult::Ok(text) => Ok(text),
-        AiResult::Error(status, body) => {
-            Err(format!("APIエラー ({}): {}", status, body).into())
-        }
-    }
-}
-
 enum AiResult {
-    Ok(String),
+    Ok(String, Usage),
     Error(reqwest::StatusCode, String),
 }
 
-async fn call_api(
+async fn call_api_raw(
     http_client: &reqwest::Client,
     api_url: &str,
     api_key: &str,
@@ -398,14 +502,40 @@ async fn call_api(
         .map(|c| c.message.content.clone())
         .unwrap_or_else(|| "応答がありませんでした。".to_string());
 
-    Ok(AiResult::Ok(reply))
+    let usage = chat_response.usage.unwrap_or_default();
+
+    Ok(AiResult::Ok(reply, usage))
+}
+
+async fn record_usage(db: &sqlx::SqlitePool, user_id: &str, model: &str, usage: Usage) {
+    sqlx::query(
+        "INSERT INTO ai_usage (user_id, model, prompt_tokens, completion_tokens) VALUES (?, ?, ?, ?)",
+    )
+    .bind(user_id)
+    .bind(model)
+    .bind(usage.prompt_tokens)
+    .bind(usage.completion_tokens)
+    .execute(db)
+    .await
+    .ok();
+}
+
+fn format_footer(model: &str, context: &str, usage: Usage) -> String {
+    let total = usage.prompt_tokens + usage.completion_tokens;
+    if total > 0 {
+        format!(
+            "{} | {} | {}+{}={} tokens",
+            model, context, usage.prompt_tokens, usage.completion_tokens, total
+        )
+    } else {
+        format!("{} | {}", model, context)
+    }
 }
 
 async fn send_embed_reply(
     channel_id: serenity::ChannelId,
     http: &serenity::Http,
     text: &str,
-    _model: &str,
     footer: &str,
 ) -> Result<(), Error> {
     if text.len() > 4000 {
