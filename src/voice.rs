@@ -59,9 +59,16 @@ pub async fn play_on_handler(
     audio_path: &str,
     volume: f32,
 ) -> Result<(), crate::error::Error> {
+    if !std::path::Path::new(audio_path).exists() {
+        return Err(format!("音声ファイルが見つかりません: {}", audio_path).into());
+    }
+
     let (tx, rx) = tokio::sync::oneshot::channel::<()>();
     {
         let mut handler = handler_lock.lock().await;
+        let info = handler.current_connection();
+        tracing::debug!("VC connection state before play: {:?}", info);
+
         let source = File::new(audio_path.to_string());
         let track_handle = handler.play_input(source.into());
         let _ = track_handle.set_volume(volume);
@@ -74,8 +81,13 @@ pub async fn play_on_handler(
         )?;
     }
 
-    let _ = rx.await;
-    Ok(())
+    match tokio::time::timeout(std::time::Duration::from_secs(30), rx).await {
+        Ok(_) => Ok(()),
+        Err(_) => {
+            tracing::warn!("play_on_handler timed out after 30s — VC connection may not be established");
+            Err("音声再生がタイムアウトしました（VC接続未確立の可能性）".into())
+        }
+    }
 }
 
 pub async fn leave_vc(manager: &Arc<songbird::Songbird>, guild_id: serenity::GuildId) {
