@@ -35,14 +35,14 @@ struct Choice {
 }
 
 /// AIに質問する
-#[poise::command(slash_command, subcommands("chat", "oneshot", "clear", "dispose"))]
+#[poise::command(slash_command, subcommands("new_conversation", "oneshot", "clear", "dispose"))]
 pub async fn ask(_ctx: Context<'_>) -> Result<(), Error> {
     Ok(())
 }
 
-/// AIに質問する（スレッド内で会話継続）
-#[poise::command(slash_command)]
-async fn chat(
+/// 新しい会話を始める
+#[poise::command(slash_command, rename = "new")]
+async fn new_conversation(
     ctx: Context<'_>,
     #[description = "質問内容"] question: String,
     #[description = "AIプロバイダー"] provider: Option<AiProvider>,
