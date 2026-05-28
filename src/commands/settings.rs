@@ -25,8 +25,11 @@ async fn apikey(
         "openai" => "openai_api_key",
         "openrouter" => "openrouter_api_key",
         _ => {
-            ctx.say("プロバイダーは `openai` または `openrouter` を指定してください。")
-                .await?;
+            ctx.send(poise::CreateReply::default().embed(
+                CreateEmbed::new()
+                    .description("プロバイダーは `openai` または `openrouter` を指定してください。")
+                    .color(0xED4245),
+            )).await?;
             return Ok(());
         }
     };
@@ -65,15 +68,18 @@ async fn provider(
 
     let valid = ["openai", "openrouter", "anthropic"];
     if !valid.contains(&name.to_lowercase().as_str()) {
-        ctx.say(format!(
-            "プロバイダーは {} のいずれかを指定してください。",
-            valid
-                .iter()
-                .map(|v| format!("`{}`", v))
-                .collect::<Vec<_>>()
-                .join(" / ")
-        ))
-        .await?;
+        ctx.send(poise::CreateReply::default().embed(
+            CreateEmbed::new()
+                .description(format!(
+                    "プロバイダーは {} のいずれかを指定してください。",
+                    valid
+                        .iter()
+                        .map(|v| format!("`{}`", v))
+                        .collect::<Vec<_>>()
+                        .join(" / ")
+                ))
+                .color(0xED4245),
+        )).await?;
         return Ok(());
     }
 

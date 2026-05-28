@@ -277,7 +277,11 @@ async fn view(
     .await?;
 
     let Some((content, is_public)) = diary else {
-        ctx.say(format!("{} の日記はありません。", date)).await?;
+        ctx.send(poise::CreateReply::default().embed(
+            CreateEmbed::new()
+                .description(format!("{} の日記はありません。", date))
+                .color(0xED4245),
+        )).await?;
         return Ok(());
     };
 
@@ -338,8 +342,11 @@ async fn search(
     .await?;
 
     if diaries.is_empty() {
-        ctx.say(format!("「{}」に一致する日記はありません。", keyword))
-            .await?;
+        ctx.send(poise::CreateReply::default().embed(
+            CreateEmbed::new()
+                .description(format!("「{}」に一致する日記はありません。", keyword))
+                .color(0xED4245),
+        )).await?;
         return Ok(());
     }
 
@@ -395,8 +402,11 @@ async fn edit(
     .await?;
 
     if existing == 0 {
-        ctx.say(format!("{} の日記はありません。`/diary write` で作成してください。", date))
-            .await?;
+        ctx.send(poise::CreateReply::default().embed(
+            CreateEmbed::new()
+                .description(format!("{} の日記はありません。`/diary write` で作成してください。", date))
+                .color(0xED4245),
+        )).await?;
         return Ok(());
     }
 
@@ -443,7 +453,11 @@ async fn delete(
     .await?;
 
     if result.rows_affected() == 0 {
-        ctx.say(format!("{} の日記はありません。", date)).await?;
+        ctx.send(poise::CreateReply::default().embed(
+            CreateEmbed::new()
+                .description(format!("{} の日記はありません。", date))
+                .color(0xED4245),
+        )).await?;
     } else {
         ctx.send(
             poise::CreateReply::default().embed(

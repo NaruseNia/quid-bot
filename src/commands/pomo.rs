@@ -201,7 +201,11 @@ async fn stop(ctx: Context<'_>) -> Result<(), Error> {
         )
         .await?;
     } else {
-        ctx.say("進行中のポモドーロはありません。").await?;
+        ctx.send(poise::CreateReply::default().embed(
+            CreateEmbed::new()
+                .description("進行中のポモドーロはありません。")
+                .color(0xED4245),
+        )).await?;
     }
     Ok(())
 }

@@ -159,7 +159,11 @@ async fn done(ctx: Context<'_>, #[description = "タスクID"] id: i64) -> Resul
     .await?;
 
     if result.rows_affected() == 0 {
-        ctx.say("該当するタスクが見つかりません。").await?;
+        ctx.send(poise::CreateReply::default().embed(
+            CreateEmbed::new()
+                .description("該当するタスクが見つかりません。")
+                .color(0xED4245),
+        )).await?;
     } else {
         ctx.send(
             poise::CreateReply::default().embed(
@@ -185,7 +189,11 @@ async fn delete(ctx: Context<'_>, #[description = "タスクID"] id: i64) -> Res
         .await?;
 
     if result.rows_affected() == 0 {
-        ctx.say("該当するタスクが見つかりません。").await?;
+        ctx.send(poise::CreateReply::default().embed(
+            CreateEmbed::new()
+                .description("該当するタスクが見つかりません。")
+                .color(0xED4245),
+        )).await?;
     } else {
         ctx.send(
             poise::CreateReply::default().embed(

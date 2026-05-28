@@ -59,8 +59,11 @@ async fn repeat(
         "weekly" => format!("0 {} * * 1", time.replace(':', " ")),
         "monthly" => format!("0 {} 1 * *", time.replace(':', " ")),
         _ => {
-            ctx.say("頻度は daily, weekly, monthly のいずれかを指定してください。")
-                .await?;
+            ctx.send(poise::CreateReply::default().embed(
+                CreateEmbed::new()
+                    .description("頻度は daily, weekly, monthly のいずれかを指定してください。")
+                    .color(0xED4245),
+            )).await?;
             return Ok(());
         }
     };
@@ -171,7 +174,11 @@ async fn delete(ctx: Context<'_>, #[description = "リマインダーID"] id: i6
             .await?;
 
     if result.rows_affected() == 0 {
-        ctx.say("該当するリマインダーが見つかりません。").await?;
+        ctx.send(poise::CreateReply::default().embed(
+            CreateEmbed::new()
+                .description("該当するリマインダーが見つかりません。")
+                .color(0xED4245),
+        )).await?;
     } else {
         ctx.send(
             poise::CreateReply::default().embed(

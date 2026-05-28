@@ -26,8 +26,11 @@ async fn add(
     .await?;
 
     if result.rows_affected() == 0 {
-        ctx.say(format!("「{}」は既に登録されています。", name))
-            .await?;
+        ctx.send(poise::CreateReply::default().embed(
+            CreateEmbed::new()
+                .description(format!("「{}」は既に登録されています。", name))
+                .color(0xED4245),
+        )).await?;
     } else {
         ctx.send(
             poise::CreateReply::default().embed(
@@ -62,8 +65,11 @@ async fn check(
     .await?;
 
     let Some((habit_id,)) = habit else {
-        ctx.say(format!("習慣「{}」が見つかりません。", name))
-            .await?;
+        ctx.send(poise::CreateReply::default().embed(
+            CreateEmbed::new()
+                .description(format!("習慣「{}」が見つかりません。", name))
+                .color(0xED4245),
+        )).await?;
         return Ok(());
     };
 
@@ -76,8 +82,11 @@ async fn check(
     .await?;
 
     if result.rows_affected() == 0 {
-        ctx.say(format!("「{}」は今日既にチェック済みです。", name))
-            .await?;
+        ctx.send(poise::CreateReply::default().embed(
+            CreateEmbed::new()
+                .description(format!("「{}」は今日既にチェック済みです。", name))
+                .color(0xED4245),
+        )).await?;
     } else {
         let streak = get_streak(&data.db, habit_id).await?;
         ctx.send(
@@ -179,8 +188,11 @@ async fn stats(
     .await?;
 
     let Some((habit_id, created_at)) = habit else {
-        ctx.say(format!("習慣「{}」が見つかりません。", name))
-            .await?;
+        ctx.send(poise::CreateReply::default().embed(
+            CreateEmbed::new()
+                .description(format!("習慣「{}」が見つかりません。", name))
+                .color(0xED4245),
+        )).await?;
         return Ok(());
     };
 
@@ -253,8 +265,11 @@ async fn remove(
     .await?;
 
     if result.rows_affected() == 0 {
-        ctx.say(format!("習慣「{}」が見つかりません。", name))
-            .await?;
+        ctx.send(poise::CreateReply::default().embed(
+            CreateEmbed::new()
+                .description(format!("習慣「{}」が見つかりません。", name))
+                .color(0xED4245),
+        )).await?;
     } else {
         ctx.send(
             poise::CreateReply::default().embed(

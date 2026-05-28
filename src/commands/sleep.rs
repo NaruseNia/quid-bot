@@ -114,8 +114,11 @@ async fn end(
     .await?;
 
     let Some((id, sleep_at_str)) = record else {
-        ctx.say("就寝記録がありません。`/sleep start` で就寝を記録してください。")
-            .await?;
+        ctx.send(poise::CreateReply::default().embed(
+            CreateEmbed::new()
+                .description("就寝記録がありません。`/sleep start` で就寝を記録してください。")
+                .color(0xED4245),
+        )).await?;
         return ::std::result::Result::Ok(());
     };
 
@@ -184,7 +187,11 @@ async fn log(
     let wake_at = parse_datetime(&wake_time)?;
 
     if wake_at <= sleep_at {
-        ctx.say("起床時刻は就寝時刻より後にしてください。").await?;
+        ctx.send(poise::CreateReply::default().embed(
+            CreateEmbed::new()
+                .description("起床時刻は就寝時刻より後にしてください。")
+                .color(0xED4245),
+        )).await?;
         return ::std::result::Result::Ok(());
     }
 
@@ -400,7 +407,11 @@ async fn history(
     .await?;
 
     if logs.is_empty() {
-        ctx.say("睡眠記録がありません。").await?;
+        ctx.send(poise::CreateReply::default().embed(
+            CreateEmbed::new()
+                .description("睡眠記録がありません。")
+                .color(0xED4245),
+        )).await?;
         return ::std::result::Result::Ok(());
     }
 

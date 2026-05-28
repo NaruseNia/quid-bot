@@ -101,8 +101,11 @@ async fn random(
     };
 
     let Some(track) = track else {
-        ctx.say("曲が見つかりませんでした。別のジャンルやキーワードを試してみてください。")
-            .await?;
+        ctx.send(poise::CreateReply::default().embed(
+            CreateEmbed::new()
+                .description("曲が見つかりませんでした。別のジャンルやキーワードを試してみてください。")
+                .color(0xED4245),
+        )).await?;
         return Ok(());
     };
 

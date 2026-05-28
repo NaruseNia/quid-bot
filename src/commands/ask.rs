@@ -148,8 +148,11 @@ async fn oneshot(
             send_embed_reply(ctx.channel_id(), ctx.http(), &text, &footer).await
         }
         AiResult::Error(status, body) => {
-            ctx.say(format!("❌ APIエラー ({}): {}", status, body))
-                .await?;
+            ctx.send(poise::CreateReply::default().embed(
+                CreateEmbed::new()
+                    .description(format!("❌ APIエラー ({}): {}", status, body))
+                    .color(0xED4245),
+            )).await?;
             Ok(())
         }
     }
@@ -189,8 +192,11 @@ async fn dispose(ctx: Context<'_>) -> Result<(), Error> {
     let channel_id = ctx.channel_id();
 
     if !is_in_thread(ctx.serenity_context(), channel_id).await {
-        ctx.say("このコマンドはスレッド内でのみ使用できます。")
-            .await?;
+        ctx.send(poise::CreateReply::default().embed(
+            CreateEmbed::new()
+                .description("このコマンドはスレッド内でのみ使用できます。")
+                .color(0xED4245),
+        )).await?;
         return Ok(());
     }
 

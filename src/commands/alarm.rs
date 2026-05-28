@@ -29,13 +29,20 @@ async fn set(
         match vc {
             Some(ch) => ch,
             None => {
-                ctx.say("VCに参加しているか、チャンネルを指定してください。")
-                    .await?;
+                ctx.send(poise::CreateReply::default().embed(
+                    CreateEmbed::new()
+                        .description("VCに参加しているか、チャンネルを指定してください。")
+                        .color(0xED4245),
+                )).await?;
                 return Ok(());
             }
         }
     } else {
-        ctx.say("VCチャンネルを指定してください。").await?;
+        ctx.send(poise::CreateReply::default().embed(
+            CreateEmbed::new()
+                .description("VCチャンネルを指定してください。")
+                .color(0xED4245),
+        )).await?;
         return Ok(());
     };
 
@@ -117,7 +124,11 @@ async fn delete(ctx: Context<'_>, #[description = "アラームID"] id: i64) -> 
             .await?;
 
     if result.rows_affected() == 0 {
-        ctx.say("該当するアラームが見つかりません。").await?;
+        ctx.send(poise::CreateReply::default().embed(
+            CreateEmbed::new()
+                .description("該当するアラームが見つかりません。")
+                .color(0xED4245),
+        )).await?;
     } else {
         ctx.send(
             poise::CreateReply::default().embed(
@@ -153,7 +164,11 @@ async fn snooze(
     .await?;
 
     if result.rows_affected() == 0 {
-        ctx.say("該当するアラームが見つかりません。").await?;
+        ctx.send(poise::CreateReply::default().embed(
+            CreateEmbed::new()
+                .description("該当するアラームが見つかりません。")
+                .color(0xED4245),
+        )).await?;
     } else {
         ctx.send(
             poise::CreateReply::default().embed(

@@ -190,8 +190,11 @@ async fn show_detail(ctx: Context<'_>, name: &str) -> Result<(), Error> {
     let name = name.strip_prefix('/').unwrap_or(name);
 
     let Some(cmd) = COMMANDS.iter().find(|c| c.name == name) else {
-        ctx.say(format!("コマンド `{}` が見つかりません。`/quid-help` で一覧を確認してください。", name))
-            .await?;
+        ctx.send(poise::CreateReply::default().embed(
+            CreateEmbed::new()
+                .description(format!("コマンド `{}` が見つかりません。`/quid-help` で一覧を確認してください。", name))
+                .color(0xED4245),
+        )).await?;
         return Ok(());
     };
 

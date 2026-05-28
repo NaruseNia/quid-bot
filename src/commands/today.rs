@@ -46,8 +46,11 @@ async fn city(
 
     let coords = geocode(&data.http_client, &name).await?;
     let Some((lat, lon, display)) = coords else {
-        ctx.say(format!("都市「{}」が見つかりません。英語名で試してみてください。", name))
-            .await?;
+        ctx.send(poise::CreateReply::default().embed(
+            CreateEmbed::new()
+                .description(format!("都市「{}」が見つかりません。英語名で試してみてください。", name))
+                .color(0xED4245),
+        )).await?;
         return Ok(());
     };
 
@@ -83,12 +86,15 @@ async fn feeds(
         .collect();
 
     if !invalid.is_empty() {
-        ctx.say(format!(
-            "無効なカテゴリ: {}。使用可能: {}",
-            invalid.iter().map(|c| format!("`{}`", c)).collect::<Vec<_>>().join(", "),
-            super::news::CATEGORIES.iter().map(|c| format!("`{}`", c)).collect::<Vec<_>>().join(", "),
-        ))
-        .await?;
+        ctx.send(poise::CreateReply::default().embed(
+            CreateEmbed::new()
+                .description(format!(
+                    "無効なカテゴリ: {}。使用可能: {}",
+                    invalid.iter().map(|c| format!("`{}`", c)).collect::<Vec<_>>().join(", "),
+                    super::news::CATEGORIES.iter().map(|c| format!("`{}`", c)).collect::<Vec<_>>().join(", "),
+                ))
+                .color(0xED4245),
+        )).await?;
         return Ok(());
     }
 

@@ -48,15 +48,22 @@ async fn show(
 
     let urls = get_feed_urls(&data.db, &guild_id, &category).await?;
     if urls.is_empty() {
-        ctx.say(format!("カテゴリ「{}」にフィードがありません。", category))
-            .await?;
+        ctx.send(poise::CreateReply::default().embed(
+            CreateEmbed::new()
+                .description(format!("カテゴリ「{}」にフィードがありません。", category))
+                .color(0xED4245),
+        )).await?;
         return Ok(());
     }
 
     let entries = fetch_feeds(&data.http_client, &urls, count).await;
 
     if entries.is_empty() {
-        ctx.say("ニュースを取得できませんでした。").await?;
+        ctx.send(poise::CreateReply::default().embed(
+            CreateEmbed::new()
+                .description("ニュースを取得できませんでした。")
+                .color(0xED4245),
+        )).await?;
         return Ok(());
     }
 
@@ -144,8 +151,11 @@ async fn remove(
         .await?;
 
     if result.rows_affected() == 0 {
-        ctx.say(format!("フィード「{}」が見つかりません。", name))
-            .await?;
+        ctx.send(poise::CreateReply::default().embed(
+            CreateEmbed::new()
+                .description(format!("フィード「{}」が見つかりません。", name))
+                .color(0xED4245),
+        )).await?;
     } else {
         ctx.send(
             poise::CreateReply::default().embed(
