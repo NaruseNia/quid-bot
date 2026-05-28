@@ -9,6 +9,8 @@ type ActiveTimers = Arc<Mutex<HashMap<String, tokio::task::JoinHandle<()>>>>;
 static TIMERS: std::sync::LazyLock<ActiveTimers> =
     std::sync::LazyLock::new(|| Arc::new(Mutex::new(HashMap::new())));
 
+const UPDATE_INTERVAL_SECS: u64 = 60;
+
 /// ポモドーロタイマー
 #[poise::command(slash_command, subcommands("start", "stop", "status"))]
 pub async fn pomo(_ctx: Context<'_>) -> Result<(), Error> {
@@ -21,6 +23,7 @@ async fn start(
     ctx: Context<'_>,
     #[description = "作業時間（分、デフォルト25）"] minutes: Option<u32>,
     #[description = "完了時にVCで通知するチャンネル"] vc_channel: Option<serenity::ChannelId>,
+    #[description = "VC参加者全員にメンションする"] notify_vc_members: Option<bool>,
 ) -> Result<(), Error> {
     let data = ctx.data();
     let user_id = ctx.author().id;
@@ -44,6 +47,7 @@ async fn start(
 
     let minutes = minutes.unwrap_or(data.config.pomodoro.default_work_min);
     let guild_id = ctx.guild_id().map(|g| g.to_string()).unwrap_or_default();
+    let notify_vc = notify_vc_members.unwrap_or(false);
 
     sqlx::query(
         "INSERT INTO pomodoro_sessions (user_id, guild_id, duration_min) VALUES (?, ?, ?)",
@@ -56,6 +60,7 @@ async fn start(
 
     let channel_id = ctx.channel_id();
     let http = ctx.serenity_context().http.clone();
+    let cache = ctx.serenity_context().cache.clone();
     let pool = data.db.clone();
     let user_id_str = user_id.to_string();
     let guild_id_clone = guild_id.clone();
@@ -67,9 +72,51 @@ async fn start(
         std::time::Duration::from_secs(data.config.audio.auto_leave_timeout_sec);
     let guild_id_parsed: serenity::GuildId = guild_id.parse::<u64>().unwrap_or(0).into();
 
-    let handle = tokio::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_secs(u64::from(minutes) * 60)).await;
+    // VC参加者のメンション文を事前に取得
+    let vc_members_mention = if notify_vc {
+        get_vc_members_mention(&cache, guild_id_parsed, user_id).await
+    } else {
+        None
+    };
 
+    let mut desc = format!("{}分間がんばりましょう！", minutes);
+    if let Some(vc) = vc_channel {
+        desc.push_str(&format!("\n🔊 完了時に <#{}> で通知", vc));
+    }
+    if let Some(ref mentions) = vc_members_mention {
+        desc.push_str(&format!("\n👥 {}", mentions));
+    }
+
+    let progress_msg = channel_id
+        .send_message(
+            ctx.http(),
+            serenity::CreateMessage::new().embed(build_progress_embed(minutes, 0)),
+        )
+        .await?;
+
+    let progress_msg_id = progress_msg.id;
+
+    let handle = tokio::spawn(async move {
+        let total_secs = u64::from(minutes) * 60;
+        let mut elapsed_secs: u64 = 0;
+
+        loop {
+            let sleep_dur = UPDATE_INTERVAL_SECS.min(total_secs - elapsed_secs);
+            tokio::time::sleep(std::time::Duration::from_secs(sleep_dur)).await;
+            elapsed_secs += sleep_dur;
+
+            if elapsed_secs >= total_secs {
+                break;
+            }
+
+            let embed = build_progress_embed(minutes, elapsed_secs);
+            channel_id
+                .edit_message(&http, progress_msg_id, serenity::EditMessage::new().embed(embed))
+                .await
+                .ok();
+        }
+
+        // 完了処理
         sqlx::query(
             "UPDATE pomodoro_sessions SET completed = 1, finished_at = datetime('now') WHERE user_id = ? AND guild_id = ? AND completed = 0",
         )
@@ -79,6 +126,7 @@ async fn start(
         .await
         .ok();
 
+        // VC通知
         if let Some(vc) = vc_channel
             && let Some(ref mgr) = manager
             && let Err(e) = crate::voice::play_sound_in_vc(
@@ -93,16 +141,23 @@ async fn start(
             tracing::warn!("pomo VC notification failed: {}", e);
         }
 
-        let embed = CreateEmbed::new()
+        // 完了embed更新
+        let done_embed = CreateEmbed::new()
             .title("🍅 ポモドーロ完了！")
-            .description(format!(
-                "<@{}> {}分間お疲れさまでした！\n休憩しましょう。",
-                user_id, minutes
-            ))
+            .description("お疲れさまでした！休憩しましょう。")
             .color(0x57F287);
-
         channel_id
-            .send_message(&http, serenity::CreateMessage::new().embed(embed))
+            .edit_message(&http, progress_msg_id, serenity::EditMessage::new().embed(done_embed))
+            .await
+            .ok();
+
+        // 完了通知（メンション付き）
+        let mut notify = format!("<@{}> ポモドーロ完了！🍅", user_id);
+        if let Some(ref mentions) = vc_members_mention {
+            notify.push_str(&format!("\n{}", mentions));
+        }
+        channel_id
+            .send_message(&http, serenity::CreateMessage::new().content(notify))
             .await
             .ok();
 
@@ -110,21 +165,6 @@ async fn start(
     });
 
     TIMERS.lock().await.insert(key, handle);
-
-    let mut desc = format!("{}分間がんばりましょう！", minutes);
-    if let Some(vc) = vc_channel {
-        desc.push_str(&format!("\n🔊 完了時に <#{}> で通知します。", vc));
-    }
-
-    ctx.send(
-        poise::CreateReply::default().embed(
-            CreateEmbed::new()
-                .title("🍅 ポモドーロ開始")
-                .description(desc)
-                .color(0xEB459E),
-        ),
-    )
-    .await?;
     Ok(())
 }
 
@@ -193,31 +233,13 @@ async fn status(ctx: Context<'_>) -> Result<(), Error> {
                 chrono::NaiveDateTime::parse_from_str(&started, "%Y-%m-%d %H:%M:%S")
                     .unwrap_or_default();
             let elapsed = chrono::Utc::now().naive_utc() - started_at;
-            let remaining = duration * 60 - elapsed.num_seconds();
+            let elapsed_secs = elapsed.num_seconds().max(0) as u64;
 
-            if remaining > 0 {
-                let mins = remaining / 60;
-                let secs = remaining % 60;
-                let progress = ((elapsed.num_seconds() as f64 / (duration as f64 * 60.0)) * 10.0)
-                    .round() as usize;
-                let bar = format!(
-                    "{}{}",
-                    "█".repeat(progress.min(10)),
-                    "░".repeat(10 - progress.min(10)),
-                );
-
-                ctx.send(
-                    poise::CreateReply::default().embed(
-                        CreateEmbed::new()
-                            .title("🍅 ポモドーロ進行中")
-                            .field("残り時間", format!("{}分{}秒", mins, secs), true)
-                            .field("作業時間", format!("{}分", duration), true)
-                            .field("進捗", bar, false)
-                            .color(0xEB459E),
-                    ),
-                )
-                .await?;
-            }
+            ctx.send(
+                poise::CreateReply::default()
+                    .embed(build_progress_embed(duration as u32, elapsed_secs)),
+            )
+            .await?;
         }
     } else {
         let data = ctx.data();
@@ -243,4 +265,60 @@ async fn status(ctx: Context<'_>) -> Result<(), Error> {
         .await?;
     }
     Ok(())
+}
+
+fn build_progress_embed(total_min: u32, elapsed_secs: u64) -> CreateEmbed {
+    let total_secs = u64::from(total_min) * 60;
+    let remaining = total_secs.saturating_sub(elapsed_secs);
+    let mins = remaining / 60;
+    let secs = remaining % 60;
+
+    let ratio = if total_secs > 0 {
+        elapsed_secs as f64 / total_secs as f64
+    } else {
+        0.0
+    };
+    let filled = (ratio * 20.0).round() as usize;
+    let bar = format!(
+        "{}{}",
+        "█".repeat(filled.min(20)),
+        "░".repeat(20 - filled.min(20)),
+    );
+
+    let pct = (ratio * 100.0).min(100.0);
+
+    CreateEmbed::new()
+        .title("🍅 ポモドーロ進行中")
+        .field("残り時間", format!("**{}:{:02}**", mins, secs), true)
+        .field("作業時間", format!("{}分", total_min), true)
+        .field("進捗", format!("{} {:.0}%", bar, pct), false)
+        .color(0xEB459E)
+}
+
+async fn get_vc_members_mention(
+    cache: &serenity::Cache,
+    guild_id: serenity::GuildId,
+    exclude_user: serenity::UserId,
+) -> Option<String> {
+    let guild = cache.guild(guild_id)?;
+
+    let user_vc = guild
+        .voice_states
+        .get(&exclude_user)
+        .and_then(|vs| vs.channel_id)?;
+
+    let mentions: Vec<String> = guild
+        .voice_states
+        .iter()
+        .filter(|(uid, vs)| {
+            **uid != exclude_user && vs.channel_id == Some(user_vc)
+        })
+        .map(|(uid, _)| format!("<@{}>", uid))
+        .collect();
+
+    if mentions.is_empty() {
+        None
+    } else {
+        Some(mentions.join(" "))
+    }
 }

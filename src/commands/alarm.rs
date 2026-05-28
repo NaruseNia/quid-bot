@@ -12,10 +12,32 @@ pub async fn alarm(_ctx: Context<'_>) -> Result<(), Error> {
 async fn set(
     ctx: Context<'_>,
     #[description = "時刻 (例: 30m, 2h, 15:00, 2025-06-01 09:00)"] time: String,
-    #[description = "VCチャンネル"] channel: serenity::ChannelId,
+    #[description = "VCチャンネル（省略時は現在のVC）"] channel: Option<serenity::ChannelId>,
 ) -> Result<(), Error> {
     let data = ctx.data();
     let guild_id = ctx.guild_id().map(|g| g.to_string()).unwrap_or_default();
+
+    let vc_channel = if let Some(ch) = channel {
+        ch
+    } else if let Some(gid) = ctx.guild_id() {
+        let guild = ctx.serenity_context().cache.guild(gid);
+        let vc = guild.and_then(|g| {
+            g.voice_states
+                .get(&ctx.author().id)
+                .and_then(|vs| vs.channel_id)
+        });
+        match vc {
+            Some(ch) => ch,
+            None => {
+                ctx.say("VCに参加しているか、チャンネルを指定してください。")
+                    .await?;
+                return Ok(());
+            }
+        }
+    } else {
+        ctx.say("VCチャンネルを指定してください。").await?;
+        return Ok(());
+    };
 
     let alarm_at = super::remind::parse_time_public(&time)?;
 
@@ -24,7 +46,7 @@ async fn set(
     )
     .bind(ctx.author().id.to_string())
     .bind(&guild_id)
-    .bind(channel.to_string())
+    .bind(vc_channel.to_string())
     .bind(alarm_at.format("%Y-%m-%d %H:%M:%S").to_string())
     .execute(&data.db)
     .await?;
@@ -33,7 +55,7 @@ async fn set(
         .title("⏰ アラーム設定完了")
         .color(0x57F287)
         .field("時刻", alarm_at.format("%Y-%m-%d %H:%M").to_string(), true)
-        .field("チャンネル", format!("<#{}>", channel), true);
+        .field("チャンネル", format!("<#{}>", vc_channel), true);
 
     ctx.send(poise::CreateReply::default().embed(embed)).await?;
     Ok(())
@@ -153,6 +175,7 @@ async fn snooze(
 
 pub async fn alarm_loop(
     http: std::sync::Arc<serenity::Http>,
+    cache: std::sync::Arc<serenity::Cache>,
     pool: sqlx::SqlitePool,
     manager: std::sync::Arc<songbird::Songbird>,
     audio_path: String,
@@ -177,8 +200,12 @@ pub async fn alarm_loop(
 
         for (id, user_id, guild_id_str, channel_id_str) in due {
             let guild_id: serenity::GuildId = guild_id_str.parse::<u64>().unwrap_or(0).into();
-            let vc_channel: serenity::ChannelId =
-                channel_id_str.parse::<u64>().unwrap_or(0).into();
+            let user_id_parsed: serenity::UserId =
+                user_id.parse::<u64>().unwrap_or(0).into();
+
+            // ユーザーが今VCにいるならそのチャンネル、なければ登録チャンネル
+            let vc_channel = get_user_current_vc(&cache, guild_id, user_id_parsed)
+                .unwrap_or_else(|| channel_id_str.parse::<u64>().unwrap_or(0).into());
 
             if let Err(e) = crate::voice::play_sound_in_vc(
                 &manager,
@@ -192,14 +219,12 @@ pub async fn alarm_loop(
                 tracing::warn!("alarm VC playback failed for alarm #{}: {}", id, e);
             }
 
-            let text_channels = http
-                .get_channels(guild_id)
-                .await
-                .unwrap_or_default();
+            let text_channels = http.get_channels(guild_id).await.unwrap_or_default();
 
-            if let Some(ch) = text_channels.iter().find(|c| {
-                c.kind == serenity::ChannelType::Text
-            }) {
+            if let Some(ch) = text_channels
+                .iter()
+                .find(|c| c.kind == serenity::ChannelType::Text)
+            {
                 let embed = CreateEmbed::new()
                     .title("⏰ アラーム！")
                     .description(format!(
@@ -221,4 +246,16 @@ pub async fn alarm_loop(
                 .ok();
         }
     }
+}
+
+fn get_user_current_vc(
+    cache: &serenity::Cache,
+    guild_id: serenity::GuildId,
+    user_id: serenity::UserId,
+) -> Option<serenity::ChannelId> {
+    let guild = cache.guild(guild_id)?;
+    guild
+        .voice_states
+        .get(&user_id)
+        .and_then(|vs| vs.channel_id)
 }

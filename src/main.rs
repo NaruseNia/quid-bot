@@ -121,6 +121,7 @@ async fn main() -> error::Result<()> {
 
                 if let Some(manager) = songbird::get(ctx).await {
                     let http2 = ctx.http.clone();
+                    let cache2 = ctx.cache.clone();
                     let alarm_file = config_alarm.audio.alarm_file.clone();
                     let auto_leave = std::time::Duration::from_secs(
                         config_alarm.audio.auto_leave_timeout_sec,
@@ -128,6 +129,7 @@ async fn main() -> error::Result<()> {
                     tokio::spawn(async move {
                         commands::alarm::alarm_loop(
                             http2,
+                            cache2,
                             pool_alarm,
                             manager,
                             alarm_file,
