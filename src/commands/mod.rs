@@ -7,6 +7,7 @@ pub mod news;
 pub mod pomo;
 pub mod sleep;
 pub mod remind;
+pub mod settings;
 pub mod today;
 pub mod todo;
 

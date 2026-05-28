@@ -291,7 +291,7 @@ async fn build_briefing(
             .join("\n");
 
         let summary =
-            super::news::generate_news_summary(http_client, config, &titles).await;
+            super::news::generate_news_summary(http_client, db, guild_id, config, &titles).await;
         embed = embed.field("📰 ニュース", summary, false);
     }
 

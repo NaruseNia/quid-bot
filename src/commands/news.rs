@@ -72,7 +72,7 @@ async fn show(
             .join("\n");
 
         let summary_text =
-            generate_news_summary(&data.http_client, &data.config, &titles).await;
+            generate_news_summary(&data.http_client, &data.db, &guild_id, &data.config, &titles).await;
         embed = embed.description(summary_text);
         embed = embed.field(
             "元記事",
@@ -271,11 +271,16 @@ pub async fn fetch_feeds(
 
 pub async fn generate_news_summary(
     http_client: &reqwest::Client,
+    db: &sqlx::SqlitePool,
+    guild_id: &str,
     config: &crate::config::Config,
     titles: &str,
 ) -> String {
-    let (api_url, api_key, model) = resolve_ai_config(config);
-    tracing::debug!(provider = %config.bot.default_ai_provider, model = %model, url = %api_url, "news summary request");
+    let ai = crate::ai::resolve(db, guild_id, config, None, None).await;
+    let api_url = ai.api_url;
+    let api_key = ai.api_key;
+    let model = ai.model;
+    tracing::debug!(model = %model, url = %api_url, "news summary request");
 
     if api_key.is_empty() {
         tracing::error!("AI API key is empty for provider: {}", config.bot.default_ai_provider);
@@ -322,30 +327,6 @@ pub async fn generate_news_summary(
         .as_str()
         .unwrap_or("（要約の生成に失敗: 応答なし）")
         .to_string()
-}
-
-fn resolve_ai_config(config: &crate::config::Config) -> (String, String, String) {
-    let model = &config.bot.default_model;
-    // OpenRouterモデル名 "openai/gpt-4o-mini" → OpenAI直接なら "gpt-4o-mini" に変換
-    let strip_prefix = |m: &str| m.split('/').next_back().unwrap_or(m).to_string();
-
-    match config.bot.default_ai_provider.as_str() {
-        "openai" => (
-            "https://api.openai.com/v1/chat/completions".to_string(),
-            std::env::var("OPENAI_API_KEY").unwrap_or_default(),
-            strip_prefix(model),
-        ),
-        "anthropic" => (
-            "https://openrouter.ai/api/v1/chat/completions".to_string(),
-            std::env::var("OPENROUTER_API_KEY").unwrap_or_default(),
-            model.clone(),
-        ),
-        _ => (
-            "https://openrouter.ai/api/v1/chat/completions".to_string(),
-            std::env::var("OPENROUTER_API_KEY").unwrap_or_default(),
-            model.clone(),
-        ),
-    }
 }
 
 fn truncate(s: &str, max: usize) -> String {

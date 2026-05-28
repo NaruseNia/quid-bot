@@ -1,3 +1,4 @@
+pub mod ai;
 mod commands;
 mod config;
 mod db;
@@ -47,6 +48,7 @@ async fn main() -> error::Result<()> {
                 commands::news::news(),
                 commands::sleep::sleep(),
                 commands::today::today(),
+                commands::settings::settings(),
                 commands::help::quid_help(),
             ],
             event_handler: |ctx, event, _framework, data| {
@@ -76,12 +78,14 @@ async fn main() -> error::Result<()> {
                                 .trim()
                                 .to_string();
 
+                            let guild_str = new_message.guild_id.map(|g| g.to_string()).unwrap_or_default();
                             if !content.is_empty()
                                 && let Err(e) = commands::ask::handle_mention(
                                     &ctx.http,
                                     &data.http_client,
                                     &data.db,
                                     &data.config,
+                                    &guild_str,
                                     new_message.channel_id,
                                     &new_message.author.id.to_string(),
                                     &content,
@@ -94,6 +98,7 @@ async fn main() -> error::Result<()> {
                         }
 
                         // thread auto-reply
+                        let guild_str2 = new_message.guild_id.map(|g| g.to_string()).unwrap_or_default();
                         if let Ok(channel) = new_message.channel_id.to_channel(ctx).await
                             && commands::ask::is_thread_channel(&channel)
                             && let Err(e) = commands::ask::handle_thread_message(
@@ -101,6 +106,7 @@ async fn main() -> error::Result<()> {
                                 &data.http_client,
                                 &data.db,
                                 &data.config,
+                                &guild_str2,
                                 new_message.channel_id,
                                 &new_message.author.id.to_string(),
                                 &new_message.content,

@@ -99,8 +99,9 @@ async fn new_conversation(
         thread.id
     };
 
-    let provider = provider.unwrap_or_else(|| default_provider(&data.config));
-    let (api_url, api_key, model_name) = resolve_api_config(provider, model, &data.config);
+    let guild_id_str = ctx.guild_id().map(|g| g.to_string()).unwrap_or_default();
+    let provider_str = provider.map(provider_to_str);
+    let ai = crate::ai::resolve(&data.db, &guild_id_str, &data.config, provider_str, model).await;
 
     call_ai_threaded(
         &data.http_client,
@@ -109,9 +110,9 @@ async fn new_conversation(
         thread_id,
         &ctx.author().id.to_string(),
         &question,
-        &api_url,
-        &api_key,
-        &model_name,
+        &ai.api_url,
+        &ai.api_key,
+        &ai.model,
     )
     .await
 }
@@ -127,11 +128,12 @@ async fn oneshot(
     ctx.defer().await?;
 
     let data = ctx.data();
-    let provider = provider.unwrap_or_else(|| default_provider(&data.config));
-    let (api_url, api_key, model_name) = resolve_api_config(provider, model, &data.config);
+    let guild_id_str = ctx.guild_id().map(|g| g.to_string()).unwrap_or_default();
+    let provider_str = provider.map(provider_to_str);
+    let ai = crate::ai::resolve(&data.db, &guild_id_str, &data.config, provider_str, model).await;
 
     let result =
-        call_api_raw(&data.http_client, &api_url, &api_key, &model_name, vec![
+        call_api_raw(&data.http_client, &ai.api_url, &ai.api_key, &ai.model, vec![
             ChatMessage {
                 role: "user".to_string(),
                 content: question.clone(),
@@ -141,8 +143,8 @@ async fn oneshot(
 
     match result {
         AiResult::Ok(text, usage) => {
-            record_usage(&data.db, &ctx.author().id.to_string(), &model_name, usage).await;
-            let footer = format_footer(&model_name, "oneshot", usage);
+            record_usage(&data.db, &ctx.author().id.to_string(), &ai.model, usage).await;
+            let footer = format_footer(&ai.model, "oneshot", usage);
             send_embed_reply(ctx.channel_id(), ctx.http(), &text, &footer).await
         }
         AiResult::Error(status, body) => {
@@ -289,11 +291,13 @@ async fn usage(ctx: Context<'_>) -> Result<(), Error> {
 
 // --- event_handler から呼ばれる公開関数 ---
 
+#[allow(clippy::too_many_arguments)]
 pub async fn handle_thread_message(
     http: &serenity::Http,
     http_client: &reqwest::Client,
     db: &sqlx::SqlitePool,
     config: &crate::config::Config,
+    guild_id: &str,
     channel_id: serenity::ChannelId,
     user_id: &str,
     content: &str,
@@ -313,8 +317,7 @@ pub async fn handle_thread_message(
 
     let _ = channel_id.broadcast_typing(http).await;
 
-    let provider = default_provider(config);
-    let (api_url, api_key, model_name) = resolve_api_config(provider, None, config);
+    let ai = crate::ai::resolve(db, guild_id, config, None, None).await;
 
     call_ai_threaded(
         http_client,
@@ -323,28 +326,29 @@ pub async fn handle_thread_message(
         channel_id,
         user_id,
         content,
-        &api_url,
-        &api_key,
-        &model_name,
+        &ai.api_url,
+        &ai.api_key,
+        &ai.model,
     )
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn handle_mention(
     http: &serenity::Http,
     http_client: &reqwest::Client,
     db: &sqlx::SqlitePool,
     config: &crate::config::Config,
+    guild_id: &str,
     channel_id: serenity::ChannelId,
     user_id: &str,
     content: &str,
 ) -> Result<(), Error> {
     let _ = channel_id.broadcast_typing(http).await;
 
-    let provider = default_provider(config);
-    let (api_url, api_key, model_name) = resolve_api_config(provider, None, config);
+    let ai = crate::ai::resolve(db, guild_id, config, None, None).await;
 
-    let result = call_api_raw(http_client, &api_url, &api_key, &model_name, vec![
+    let result = call_api_raw(http_client, &ai.api_url, &ai.api_key, &ai.model, vec![
         ChatMessage {
             role: "user".to_string(),
             content: content.to_string(),
@@ -354,8 +358,8 @@ pub async fn handle_mention(
 
     match result {
         AiResult::Ok(text, usage) => {
-            record_usage(db, user_id, &model_name, usage).await;
-            let footer = format_footer(&model_name, "oneshot", usage);
+            record_usage(db, user_id, &ai.model, usage).await;
+            let footer = format_footer(&ai.model, "oneshot", usage);
             send_embed_reply(channel_id, http, &text, &footer).await
         }
         AiResult::Error(status, body) => {
@@ -589,34 +593,10 @@ pub fn is_thread_channel(channel: &serenity::Channel) -> bool {
     )
 }
 
-fn default_provider(config: &crate::config::Config) -> AiProvider {
-    match config.bot.default_ai_provider.as_str() {
-        "openai" => AiProvider::OpenAI,
-        "anthropic" => AiProvider::Anthropic,
-        _ => AiProvider::OpenRouter,
-    }
-}
-
-fn resolve_api_config(
-    provider: AiProvider,
-    model: Option<String>,
-    config: &crate::config::Config,
-) -> (String, String, String) {
-    match provider {
-        AiProvider::OpenRouter => (
-            "https://openrouter.ai/api/v1/chat/completions".to_string(),
-            std::env::var("OPENROUTER_API_KEY").expect("OPENROUTER_API_KEY not set"),
-            model.unwrap_or_else(|| config.bot.default_model.clone()),
-        ),
-        AiProvider::OpenAI => (
-            "https://api.openai.com/v1/chat/completions".to_string(),
-            std::env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY not set"),
-            model.unwrap_or_else(|| "gpt-4o-mini".to_string()),
-        ),
-        AiProvider::Anthropic => (
-            "https://openrouter.ai/api/v1/chat/completions".to_string(),
-            std::env::var("OPENROUTER_API_KEY").expect("OPENROUTER_API_KEY not set"),
-            model.unwrap_or_else(|| "anthropic/claude-sonnet-4-20250514".to_string()),
-        ),
+fn provider_to_str(p: AiProvider) -> &'static str {
+    match p {
+        AiProvider::OpenRouter => "openrouter",
+        AiProvider::OpenAI => "openai",
+        AiProvider::Anthropic => "anthropic",
     }
 }
