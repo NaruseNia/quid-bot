@@ -7,6 +7,7 @@ edition = "2024"
 poise = "0.6"
 serenity = { version = "0.12", features = ["voice"] }
 songbird = "0.6"
+symphonia = { version = "0.5", features = ["mp3", "ogg", "wav", "flac", "pcm"] }
 tokio = { version = "1", features = ["full"] }
 sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite"] }
 reqwest = { version = "0.12", features = ["json"] }
