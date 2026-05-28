@@ -27,7 +27,7 @@ pub async fn resolve(
 
     match provider.as_str() {
         "openai" => {
-            let api_key = get_guild_setting(db, guild_id, "openai_api_key")
+            let api_key = get_encrypted_setting(db, guild_id, "openai_api_key")
                 .await
                 .or_else(|| std::env::var("OPENAI_API_KEY").ok())
                 .unwrap_or_default();
@@ -39,7 +39,7 @@ pub async fn resolve(
             }
         }
         "anthropic" => {
-            let api_key = get_guild_setting(db, guild_id, "openrouter_api_key")
+            let api_key = get_encrypted_setting(db, guild_id, "openrouter_api_key")
                 .await
                 .or_else(|| std::env::var("OPENROUTER_API_KEY").ok())
                 .unwrap_or_default();
@@ -57,7 +57,7 @@ pub async fn resolve(
             }
         }
         _ => {
-            let api_key = get_guild_setting(db, guild_id, "openrouter_api_key")
+            let api_key = get_encrypted_setting(db, guild_id, "openrouter_api_key")
                 .await
                 .or_else(|| std::env::var("OPENROUTER_API_KEY").ok())
                 .unwrap_or_default();
@@ -87,6 +87,17 @@ async fn get_guild_setting(db: &SqlitePool, guild_id: &str, key: &str) -> Option
     .flatten()
 }
 
+async fn get_encrypted_setting(db: &SqlitePool, guild_id: &str, key: &str) -> Option<String> {
+    let encrypted = get_guild_setting(db, guild_id, key).await?;
+    match crate::crypto::decrypt(&encrypted) {
+        Ok(plaintext) => Some(plaintext),
+        Err(e) => {
+            tracing::warn!("failed to decrypt setting {} for guild {}: {}", key, guild_id, e);
+            None
+        }
+    }
+}
+
 pub async fn set_guild_setting(
     db: &SqlitePool,
     guild_id: &str,
@@ -102,4 +113,14 @@ pub async fn set_guild_setting(
     .execute(db)
     .await?;
     Ok(())
+}
+
+pub async fn set_encrypted_setting(
+    db: &SqlitePool,
+    guild_id: &str,
+    key: &str,
+    plaintext: &str,
+) -> Result<(), crate::error::Error> {
+    let encrypted = crate::crypto::encrypt(plaintext)?;
+    set_guild_setting(db, guild_id, key, &encrypted).await
 }

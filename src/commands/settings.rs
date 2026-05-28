@@ -31,7 +31,7 @@ async fn apikey(
         }
     };
 
-    crate::ai::set_guild_setting(&data.db, &guild_id, setting_key, &key).await?;
+    crate::ai::set_encrypted_setting(&data.db, &guild_id, setting_key, &key).await?;
 
     let masked = if key.len() > 8 {
         format!("{}...{}", &key[..4], &key[key.len() - 4..])

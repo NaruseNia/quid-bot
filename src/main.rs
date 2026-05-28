@@ -1,6 +1,7 @@
 pub mod ai;
 mod commands;
 mod config;
+pub mod crypto;
 mod db;
 mod error;
 mod voice;
