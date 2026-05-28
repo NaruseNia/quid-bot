@@ -33,16 +33,25 @@ pub async fn join_vc(
     guild_id: serenity::GuildId,
     channel_id: serenity::ChannelId,
 ) -> Result<Arc<tokio::sync::Mutex<songbird::Call>>, crate::error::Error> {
-    if let Ok(handler) = manager.join(guild_id, channel_id).await {
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-        return Ok(handler);
+    match manager.join(guild_id, channel_id).await {
+        Ok(handler) => {
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            return Ok(handler);
+        }
+        Err(e) => {
+            tracing::warn!("VC join failed: {:?}", e);
+        }
     }
 
     // join() failed but voice state update was sent (bot appears in VC).
     // The UDP connection may still be establishing — grab the existing handler.
     if let Some(handler) = manager.get(guild_id) {
-        tracing::info!("VC join timed out, using existing handler (connection may be in progress)");
-        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        tracing::warn!("Using existing handler after join failure, waiting 5s for connection...");
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        let guard = handler.lock().await;
+        let conn = guard.current_connection();
+        tracing::warn!("Connection state after wait: {:?}", conn);
+        drop(guard);
         return Ok(handler);
     }
 
@@ -67,7 +76,7 @@ pub async fn play_on_handler(
     {
         let mut handler = handler_lock.lock().await;
         let info = handler.current_connection();
-        tracing::debug!("VC connection state before play: {:?}", info);
+        tracing::warn!("VC connection before play: {:?}", info);
 
         let source = File::new(audio_path.to_string());
         let track_handle = handler.play_input(source.into());
