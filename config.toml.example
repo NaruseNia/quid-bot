@@ -1,0 +1,16 @@
+[bot]
+# デフォルトのAIプロバイダー: "openrouter" | "openai" | "anthropic"
+default_ai_provider = "openrouter"
+# OpenRouterで使用するモデル
+default_model = "openai/gpt-4o-mini"
+
+[pomodoro]
+default_work_min = 25
+default_break_min = 5
+
+[diary]
+# 日報テンプレートの項目
+template_fields = ["やったこと", "明日やること", "感想"]
+
+[database]
+path = "data/quid.db"
