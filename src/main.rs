@@ -42,12 +42,14 @@ async fn main() -> error::Result<()> {
                 commands::habit::habit(),
                 commands::alarm::alarm(),
             ],
-            event_handler: |_ctx, event, _framework, _data| {
+            event_handler: |ctx, event, _framework, data| {
                 Box::pin(async move {
                     if let serenity::FullEvent::Message { new_message } = event {
                         if new_message.author.bot {
                             return Ok(());
                         }
+
+                        // diary recording mode
                         commands::diary::handle_message(
                             new_message.author.id,
                             new_message.channel_id,
@@ -55,6 +57,49 @@ async fn main() -> error::Result<()> {
                             &new_message.content,
                         )
                         .await;
+
+                        let bot_id = ctx.cache.current_user().id;
+
+                        // @mention → oneshot
+                        if new_message.mentions_user_id(bot_id) {
+                            let content = new_message
+                                .content
+                                .replace(&format!("<@{}>", bot_id), "")
+                                .replace(&format!("<@!{}>", bot_id), "")
+                                .trim()
+                                .to_string();
+
+                            if !content.is_empty()
+                                && let Err(e) = commands::ask::handle_mention(
+                                    &ctx.http,
+                                    &data.http_client,
+                                    &data.config,
+                                    new_message.channel_id,
+                                    &content,
+                                )
+                                .await
+                            {
+                                tracing::warn!("mention handler error: {}", e);
+                            }
+                            return Ok(());
+                        }
+
+                        // thread auto-reply
+                        if let Ok(channel) = new_message.channel_id.to_channel(ctx).await
+                            && commands::ask::is_thread_channel(&channel)
+                            && let Err(e) = commands::ask::handle_thread_message(
+                                &ctx.http,
+                                &data.http_client,
+                                &data.db,
+                                &data.config,
+                                new_message.channel_id,
+                                &new_message.author.id.to_string(),
+                                &new_message.content,
+                            )
+                            .await
+                        {
+                            tracing::warn!("thread auto-reply error: {}", e);
+                        }
                     }
                     Ok(())
                 })
