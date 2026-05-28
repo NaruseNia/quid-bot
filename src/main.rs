@@ -46,6 +46,7 @@ async fn main() -> error::Result<()> {
                 commands::remind::remind(),
                 commands::habit::habit(),
                 commands::alarm::alarm(),
+                commands::music::music(),
                 commands::news::news(),
                 commands::sleep::sleep(),
                 commands::today::today(),
