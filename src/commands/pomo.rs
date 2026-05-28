@@ -1,5 +1,5 @@
 use super::{Context, Error};
-use poise::serenity_prelude::CreateEmbed;
+use poise::serenity_prelude::{self as serenity, CreateEmbed};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -20,6 +20,7 @@ pub async fn pomo(_ctx: Context<'_>) -> Result<(), Error> {
 async fn start(
     ctx: Context<'_>,
     #[description = "作業時間（分、デフォルト25）"] minutes: Option<u32>,
+    #[description = "完了時にVCで通知するチャンネル"] vc_channel: Option<serenity::ChannelId>,
 ) -> Result<(), Error> {
     let data = ctx.data();
     let user_id = ctx.author().id;
@@ -60,6 +61,12 @@ async fn start(
     let guild_id_clone = guild_id.clone();
     let key_clone = key.clone();
 
+    let manager = songbird::get(ctx.serenity_context()).await;
+    let pomo_file = data.config.audio.pomo_file.clone();
+    let auto_leave_timeout =
+        std::time::Duration::from_secs(data.config.audio.auto_leave_timeout_sec);
+    let guild_id_parsed: serenity::GuildId = guild_id.parse::<u64>().unwrap_or(0).into();
+
     let handle = tokio::spawn(async move {
         tokio::time::sleep(std::time::Duration::from_secs(u64::from(minutes) * 60)).await;
 
@@ -72,6 +79,20 @@ async fn start(
         .await
         .ok();
 
+        if let Some(vc) = vc_channel
+            && let Some(ref mgr) = manager
+            && let Err(e) = crate::voice::play_sound_in_vc(
+                mgr,
+                guild_id_parsed,
+                vc,
+                &pomo_file,
+                auto_leave_timeout,
+            )
+            .await
+        {
+            tracing::warn!("pomo VC notification failed: {}", e);
+        }
+
         let embed = CreateEmbed::new()
             .title("🍅 ポモドーロ完了！")
             .description(format!(
@@ -81,7 +102,7 @@ async fn start(
             .color(0x57F287);
 
         channel_id
-            .send_message(&http, poise::serenity_prelude::CreateMessage::new().embed(embed))
+            .send_message(&http, serenity::CreateMessage::new().embed(embed))
             .await
             .ok();
 
@@ -90,11 +111,16 @@ async fn start(
 
     TIMERS.lock().await.insert(key, handle);
 
+    let mut desc = format!("{}分間がんばりましょう！", minutes);
+    if let Some(vc) = vc_channel {
+        desc.push_str(&format!("\n🔊 完了時に <#{}> で通知します。", vc));
+    }
+
     ctx.send(
         poise::CreateReply::default().embed(
             CreateEmbed::new()
                 .title("🍅 ポモドーロ開始")
-                .description(format!("{}分間がんばりましょう！", minutes))
+                .description(desc)
                 .color(0xEB459E),
         ),
     )
@@ -172,8 +198,10 @@ async fn status(ctx: Context<'_>) -> Result<(), Error> {
             if remaining > 0 {
                 let mins = remaining / 60;
                 let secs = remaining % 60;
-                let progress = ((elapsed.num_seconds() as f64 / (duration as f64 * 60.0)) * 10.0).round() as usize;
-                let bar = format!("{}{}",
+                let progress = ((elapsed.num_seconds() as f64 / (duration as f64 * 60.0)) * 10.0)
+                    .round() as usize;
+                let bar = format!(
+                    "{}{}",
                     "█".repeat(progress.min(10)),
                     "░".repeat(10 - progress.min(10)),
                 );

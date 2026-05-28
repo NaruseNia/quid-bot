@@ -14,3 +14,11 @@ template_fields = ["やったこと", "明日やること", "感想"]
 
 [database]
 path = "data/quid.db"
+
+[audio]
+# アラーム通知音
+alarm_file = "assets/alarm.mp3"
+# ポモドーロ完了音
+pomo_file = "assets/pomo.mp3"
+# VC内に誰もいなくなった後、自動退出するまでの秒数
+auto_leave_timeout_sec = 30

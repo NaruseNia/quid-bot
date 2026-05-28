@@ -2,7 +2,7 @@ use super::{Context, Error};
 use poise::serenity_prelude::{self as serenity, CreateEmbed};
 
 /// VCアラーム
-#[poise::command(slash_command, subcommands("set", "list_alarms", "delete"))]
+#[poise::command(slash_command, subcommands("set", "list_alarms", "delete", "snooze"))]
 pub async fn alarm(_ctx: Context<'_>) -> Result<(), Error> {
     Ok(())
 }
@@ -108,4 +108,117 @@ async fn delete(ctx: Context<'_>, #[description = "アラームID"] id: i64) -> 
         .await?;
     }
     Ok(())
+}
+
+/// アラームをスヌーズ（5分後に再通知）
+#[poise::command(slash_command)]
+async fn snooze(
+    ctx: Context<'_>,
+    #[description = "アラームID"] id: i64,
+    #[description = "スヌーズ時間（分、デフォルト5）"] minutes: Option<i64>,
+) -> Result<(), Error> {
+    let data = ctx.data();
+    let minutes = minutes.unwrap_or(5);
+    let new_time = chrono::Local::now().naive_local() + chrono::Duration::minutes(minutes);
+
+    let result = sqlx::query(
+        "UPDATE alarms SET alarm_at = ?, is_active = 1 WHERE id = ? AND user_id = ?",
+    )
+    .bind(new_time.format("%Y-%m-%d %H:%M:%S").to_string())
+    .bind(id)
+    .bind(ctx.author().id.to_string())
+    .execute(&data.db)
+    .await?;
+
+    if result.rows_affected() == 0 {
+        ctx.say("該当するアラームが見つかりません。").await?;
+    } else {
+        ctx.send(
+            poise::CreateReply::default().embed(
+                CreateEmbed::new()
+                    .title("💤 スヌーズ設定")
+                    .description(format!(
+                        "アラーム #{} を{}分後に再設定しました。\n再通知: {}",
+                        id,
+                        minutes,
+                        new_time.format("%H:%M")
+                    ))
+                    .color(0xFEE75C),
+            ),
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+pub async fn alarm_loop(
+    http: std::sync::Arc<serenity::Http>,
+    pool: sqlx::SqlitePool,
+    manager: std::sync::Arc<songbird::Songbird>,
+    audio_path: String,
+    auto_leave_timeout: std::time::Duration,
+) {
+    loop {
+        tokio::time::sleep(std::time::Duration::from_secs(15)).await;
+
+        let now = chrono::Local::now()
+            .naive_local()
+            .format("%Y-%m-%d %H:%M:%S")
+            .to_string();
+
+        let due = sqlx::query_as::<_, (i64, String, String, String)>(
+            "SELECT id, user_id, guild_id, channel_id FROM alarms WHERE is_active = 1 AND alarm_at <= ?",
+        )
+        .bind(&now)
+        .fetch_all(&pool)
+        .await;
+
+        let Ok(due) = due else { continue };
+
+        for (id, user_id, guild_id_str, channel_id_str) in due {
+            let guild_id: serenity::GuildId = guild_id_str.parse::<u64>().unwrap_or(0).into();
+            let vc_channel: serenity::ChannelId =
+                channel_id_str.parse::<u64>().unwrap_or(0).into();
+
+            if let Err(e) = crate::voice::play_sound_in_vc(
+                &manager,
+                guild_id,
+                vc_channel,
+                &audio_path,
+                auto_leave_timeout,
+            )
+            .await
+            {
+                tracing::warn!("alarm VC playback failed for alarm #{}: {}", id, e);
+            }
+
+            let text_channels = http
+                .get_channels(guild_id)
+                .await
+                .unwrap_or_default();
+
+            if let Some(ch) = text_channels.iter().find(|c| {
+                c.kind == serenity::ChannelType::Text
+            }) {
+                let embed = CreateEmbed::new()
+                    .title("⏰ アラーム！")
+                    .description(format!(
+                        "<@{}> アラームの時間です！\n`/alarm snooze {}` でスヌーズできます。",
+                        user_id, id
+                    ))
+                    .color(0xED4245);
+
+                ch.id
+                    .send_message(&http, serenity::CreateMessage::new().embed(embed))
+                    .await
+                    .ok();
+            }
+
+            sqlx::query("UPDATE alarms SET is_active = 0 WHERE id = ?")
+                .bind(id)
+                .execute(&pool)
+                .await
+                .ok();
+        }
+    }
 }

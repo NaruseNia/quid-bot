@@ -2,6 +2,7 @@ mod commands;
 mod config;
 mod db;
 mod error;
+mod voice;
 
 use poise::serenity_prelude as serenity;
 use songbird::SerenityInit;
@@ -26,7 +27,9 @@ async fn main() -> error::Result<()> {
     let pool = db::init(&config.database.path).await?;
     let http_client = reqwest::Client::new();
 
-    let pool_bg = pool.clone();
+    let pool_remind = pool.clone();
+    let pool_alarm = pool.clone();
+    let config_alarm = config.clone();
 
     let framework = poise::Framework::builder()
         .options(poise::FrameworkOptions {
@@ -65,8 +68,26 @@ async fn main() -> error::Result<()> {
 
                 let http = ctx.http.clone();
                 tokio::spawn(async move {
-                    commands::remind::reminder_loop(http, pool_bg.clone()).await;
+                    commands::remind::reminder_loop(http, pool_remind).await;
                 });
+
+                if let Some(manager) = songbird::get(ctx).await {
+                    let http2 = ctx.http.clone();
+                    let alarm_file = config_alarm.audio.alarm_file.clone();
+                    let auto_leave = std::time::Duration::from_secs(
+                        config_alarm.audio.auto_leave_timeout_sec,
+                    );
+                    tokio::spawn(async move {
+                        commands::alarm::alarm_loop(
+                            http2,
+                            pool_alarm,
+                            manager,
+                            alarm_file,
+                            auto_leave,
+                        )
+                        .await;
+                    });
+                }
 
                 Ok(Data {
                     db: pool,
