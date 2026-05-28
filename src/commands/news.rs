@@ -274,13 +274,13 @@ pub async fn generate_news_summary(
     config: &crate::config::Config,
     titles: &str,
 ) -> String {
-    let api_key = std::env::var("OPENROUTER_API_KEY").unwrap_or_default();
+    let (api_url, api_key, model) = resolve_ai_config(config);
     if api_key.is_empty() {
         return "（API キーが未設定のため要約を生成できません）".to_string();
     }
 
     let request = serde_json::json!({
-        "model": config.bot.default_model,
+        "model": model,
         "messages": [{
             "role": "user",
             "content": format!(
@@ -291,7 +291,7 @@ pub async fn generate_news_summary(
     });
 
     let resp = http_client
-        .post("https://openrouter.ai/api/v1/chat/completions")
+        .post(&api_url)
         .header("Authorization", format!("Bearer {}", api_key))
         .json(&request)
         .send()
@@ -309,6 +309,26 @@ pub async fn generate_news_summary(
         .as_str()
         .unwrap_or("（要約の生成に失敗しました）")
         .to_string()
+}
+
+fn resolve_ai_config(config: &crate::config::Config) -> (String, String, String) {
+    match config.bot.default_ai_provider.as_str() {
+        "openai" => (
+            "https://api.openai.com/v1/chat/completions".to_string(),
+            std::env::var("OPENAI_API_KEY").unwrap_or_default(),
+            config.bot.default_model.clone(),
+        ),
+        "anthropic" => (
+            "https://openrouter.ai/api/v1/chat/completions".to_string(),
+            std::env::var("OPENROUTER_API_KEY").unwrap_or_default(),
+            config.bot.default_model.clone(),
+        ),
+        _ => (
+            "https://openrouter.ai/api/v1/chat/completions".to_string(),
+            std::env::var("OPENROUTER_API_KEY").unwrap_or_default(),
+            config.bot.default_model.clone(),
+        ),
+    }
 }
 
 fn truncate(s: &str, max: usize) -> String {
